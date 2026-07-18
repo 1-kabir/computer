@@ -581,13 +581,18 @@ class ChatMessage(Base):
         role: str,
         content: str,
         parent_id: str | None = None,
-        model: str | None = None,
+        model: object = None,
         done: bool = True,
         output: dict | list | None = None,
         usage: dict | None = None,
         meta: dict | None = None,
         created_at: int = 0,
     ) -> ChatMessage:
+        if isinstance(model, (list, tuple)):
+            model = next((item.strip() for item in model if isinstance(item, str) and item.strip()), None)
+        elif model is not None and not isinstance(model, str):
+            model = str(model)
+
         async with await get_db() as db:
             msg = ChatMessage(
                 chat_id=chat_id,

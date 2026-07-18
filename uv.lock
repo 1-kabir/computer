@@ -284,7 +284,7 @@ wheels = [
 
 [[package]]
 name = "cptr"
-version = "0.9.9"
+version = "0.9.10"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -341,7 +341,7 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'agents'", specifier = ">=0.1.62" },
     { name = "claude-agent-sdk", marker = "extra == 'all'", specifier = ">=0.1.62" },
     { name = "click", specifier = ">=8.1" },
-    { name = "cryptography", specifier = ">=42.0" },
+    { name = "cryptography", specifier = ">=42.0,<49.0.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128.8" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "loguru", specifier = ">=0.7.3" },

@@ -17,22 +17,7 @@ from cptr.utils.agents.events import (
     AgentTextDelta,
     AgentToolUpdate,
 )
-
-
-def _prompt_from_messages(messages: list[dict[str, Any]]) -> str:
-    parts: list[str] = []
-    for message in messages:
-        role = message.get("role", "user")
-        content = message.get("content", "")
-        if isinstance(content, list):
-            text = "\n".join(
-                str(block.get("text", "")) for block in content if isinstance(block, dict)
-            )
-        else:
-            text = str(content or "")
-        if text:
-            parts.append(f"[{role}]\n{text}")
-    return "\n\n".join(parts)
+from cptr.utils.agents.prompts import latest_user_text
 
 
 def _claude_query_input(
@@ -124,7 +109,7 @@ async def run_claude_code_agent(
         yield AgentError("Claude Code support requires the claude-agent-sdk Python package")
         return
 
-    prompt = _prompt_from_messages(messages)
+    prompt = latest_user_text(messages)
     env = os.environ.copy()
     if profile.get("home"):
         env["HOME"] = os.path.expanduser(str(profile["home"]))
@@ -134,6 +119,11 @@ async def run_claude_code_agent(
     extra_args = shlex.split(launch_args) if launch_args else []
 
     try:
+        session_id = None
+        if resume_state:
+            value = resume_state.get("session_id")
+            session_id = value if isinstance(value, str) and value else None
+
         options_kwargs: dict[str, Any] = {
             "system_prompt": system_prompt or None,
             "permission_mode": permission_mode,
@@ -141,6 +131,8 @@ async def run_claude_code_agent(
             "include_partial_messages": True,
             "max_buffer_size": CLAUDE_CODE_MAX_BUFFER_SIZE,
         }
+        if session_id:
+            options_kwargs["resume"] = session_id
         if workspace:
             options_kwargs["cwd"] = workspace
         if extra_args:
@@ -153,10 +145,6 @@ async def run_claude_code_agent(
 
         client = sdk.ClaudeSDKClient(options)
         await client.connect()
-        session_id = None
-        if resume_state:
-            value = resume_state.get("session_id")
-            session_id = value if isinstance(value, str) and value else None
 
         try:
             query_input = _claude_query_input(prompt, attachments)

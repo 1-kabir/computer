@@ -17,12 +17,27 @@ export type AppearancePreferences = {
 	theme?: Theme;
 	themeConfig?: ThemeConfig | null;
 	textScale?: number | null;
+	borderContrast?: number | null;
+	highContrastBorders?: boolean;
 };
 
 type ResolvedTheme = 'dark' | 'light';
 
 const DEFAULT_UI_FONT =
 	"'Inter', -apple-system, BlinkMacSystemFont, ui-sans-serif, system-ui, sans-serif";
+export const DEFAULT_BORDER_CONTRAST = 1.5;
+export const DEFAULT_DIVIDER_CONTRAST = 0.875;
+export const MAX_BORDER_CONTRAST = 16;
+
+export function normalizeBorderContrast(value: unknown): number | null {
+	if (value === null || value === undefined || value === '') return null;
+	const contrast = Number(value);
+	if (!Number.isFinite(contrast)) return null;
+	return Math.max(
+		DEFAULT_BORDER_CONTRAST,
+		Math.min(MAX_BORDER_CONTRAST, Number(contrast.toFixed(1)))
+	);
+}
 
 export function resolveThemeMode(theme: Theme): ResolvedTheme {
 	if (theme === 'system' && typeof window !== 'undefined') {
@@ -103,18 +118,26 @@ function setVar(name: string, value: string) {
 export function applyAppearance(
 	theme: Theme,
 	config: ThemeConfig | null,
-	textScale: number | null
+	textScale: number | null,
+	borderContrast: number | null = null
 ) {
 	if (typeof document === 'undefined') return;
 
 	const resolved = resolveThemeMode(theme);
 	const merged = resolveThemeConfig(theme, config);
+	const borderMix = normalizeBorderContrast(borderContrast) ?? DEFAULT_BORDER_CONTRAST;
+	const dividerMix =
+		borderMix === DEFAULT_BORDER_CONTRAST
+			? DEFAULT_DIVIDER_CONTRAST
+			: Number(((borderMix * 2) / 3).toFixed(3));
 
 	document.documentElement.classList.toggle('dark', resolved === 'dark');
 	document.documentElement.style.colorScheme = resolved;
 
 	setVar('--app-bg', merged.background);
 	setVar('--app-fg', merged.foreground);
+	setVar('--app-border', `color-mix(in oklab, var(--app-fg) ${borderMix}%, transparent)`);
+	setVar('--app-divider', `color-mix(in oklab, var(--app-fg) ${dividerMix}%, transparent)`);
 	setVar('--app-ui-font', merged.uiFont);
 	setVar('--font-sans', merged.uiFont);
 

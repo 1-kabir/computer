@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.10] - 2026-07-18
+
+### Added
+
+- 🎚️ **You can make borders easier to see.** Appearance settings now include a border contrast control, so people who found the softer 0.9.9 borders hard to follow can make workspace sections stand out again without changing themes.
+
+### Changed
+
+- 🤖 **Coding-agent chats continue more naturally.** Codex, Claude Code, Cursor, Cline, Grok, and OpenCode now send your latest request into the existing agent chat instead of replaying the whole conversation back at the agent.
+
+### Fixed
+
+- 💬 **Open WebUI messages save even when the model arrives as a list.** Computer now accepts Open WebUI's model format and keeps the chat turn instead of dropping it during save.
+- 📁 **Dropping a file onto an open folder uploads it once.** File drops on expanded folders now go only to that folder, not both the folder and the current directory.
+- 🎚️ **The border contrast slider is easier to use.** The slider track and handle are more visible in light and dark mode.
+- 📦 **Fresh installs avoid a known package mismatch.** Computer now stays within the supported `cryptography` release range instead of picking a newer release that can break installs.
+
 ## [0.9.9] - 2026-07-16
 
 ### Changed

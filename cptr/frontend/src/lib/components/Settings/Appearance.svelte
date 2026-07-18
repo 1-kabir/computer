@@ -2,10 +2,20 @@
 	import { toast } from 'svelte-sonner';
 	import Icon from '../Icon.svelte';
 	import { t } from '$lib/i18n';
-	import { expandToolDetails, textScale, theme, themeConfig, widescreenMode } from '$lib/stores';
+	import {
+		borderContrast,
+		expandToolDetails,
+		textScale,
+		theme,
+		themeConfig,
+		widescreenMode
+	} from '$lib/stores';
 	import ToggleSwitch from '$lib/components/common/ToggleSwitch.svelte';
 	import type { Theme, ThemeConfig } from '$lib/stores';
 	import {
+		DEFAULT_BORDER_CONTRAST,
+		MAX_BORDER_CONTRAST,
+		normalizeBorderContrast,
 		normalizeHexColor,
 		resolveThemeMode,
 		resolveThemeConfig,
@@ -14,16 +24,19 @@
 
 	const minTextScale = 1;
 	const maxTextScale = 1.5;
+	const borderContrastStep = 0.5;
 
 	let fileInput: HTMLInputElement;
 	let scaleEnabled = $state(false);
 	let scaleDraft = $state(1);
+	let borderContrastEnabled = $state(false);
+	let borderContrastDraft = $state(DEFAULT_BORDER_CONTRAST);
 	let colorDrafts = $state({ background: '', foreground: '' });
 
 	const resolvedTheme = $derived(resolveThemeMode($theme));
 	const resolvedConfig = $derived(resolveThemeConfig($theme, $themeConfig));
 	const hasCustomAppearance = $derived(
-		Boolean($themeConfig || $textScale !== null || $widescreenMode)
+		Boolean($themeConfig || $textScale !== null || $borderContrast !== null || $widescreenMode)
 	);
 
 	$effect(() => {
@@ -36,6 +49,12 @@
 			scaleDraft = $textScale;
 		} else if (!scaleEnabled) {
 			scaleDraft = 1;
+		}
+		if ($borderContrast !== null) {
+			borderContrastEnabled = true;
+			borderContrastDraft = $borderContrast;
+		} else if (!borderContrastEnabled) {
+			borderContrastDraft = DEFAULT_BORDER_CONTRAST;
 		}
 	});
 
@@ -78,6 +97,17 @@
 		}
 	}
 
+	function toggleBorderContrast() {
+		if (borderContrastEnabled) {
+			borderContrastEnabled = false;
+			borderContrastDraft = DEFAULT_BORDER_CONTRAST;
+			borderContrast.set(null);
+		} else {
+			borderContrastEnabled = true;
+			borderContrastDraft = $borderContrast ?? DEFAULT_BORDER_CONTRAST;
+		}
+	}
+
 	function normalizeTextScale(scale: number | string) {
 		const value = Number(scale);
 		if (!Number.isFinite(value)) return minTextScale;
@@ -86,6 +116,11 @@
 
 	function scaleLabel(scale: number) {
 		return `${scale.toFixed(scale % 1 === 0 ? 0 : 2)}x`;
+	}
+
+	function borderContrastLabel(contrast: number | null) {
+		if (contrast === null) return $t('general.default');
+		return `${contrast.toFixed(contrast % 1 === 0 ? 0 : 1)}%`;
 	}
 
 	function setTextScalePreference(scale: number | string) {
@@ -100,11 +135,26 @@
 		}
 	}
 
+	function setBorderContrastPreference(contrast: number | string) {
+		const next = normalizeBorderContrast(contrast) ?? DEFAULT_BORDER_CONTRAST;
+		borderContrastDraft = next;
+		if (next === DEFAULT_BORDER_CONTRAST) {
+			borderContrastEnabled = false;
+			borderContrast.set(null);
+		} else {
+			borderContrastEnabled = true;
+			borderContrast.set(next);
+		}
+	}
+
 	function resetAppearance() {
 		themeConfig.set(null);
 		scaleEnabled = false;
 		scaleDraft = 1;
 		textScale.set(null);
+		borderContrastEnabled = false;
+		borderContrastDraft = DEFAULT_BORDER_CONTRAST;
+		borderContrast.set(null);
 		widescreenMode.set(false);
 	}
 
@@ -113,6 +163,7 @@
 			theme: $theme,
 			themeConfig: sanitizeThemeConfig($themeConfig),
 			textScale: $textScale,
+			borderContrast: $borderContrast,
 			widescreenMode: $widescreenMode
 		};
 
@@ -162,11 +213,15 @@
 					: undefined;
 			const importedWidescreenMode =
 				typeof parsed?.widescreenMode === 'boolean' ? parsed.widescreenMode : undefined;
+			const importedBorderContrast =
+				normalizeBorderContrast(parsed?.borderContrast) ??
+				(parsed?.highContrastBorders === true ? 12 : undefined);
 
 			if (
 				!importedConfig &&
 				!importedTheme &&
 				importedScale === undefined &&
+				importedBorderContrast === undefined &&
 				importedWidescreenMode === undefined
 			) {
 				throw new Error('empty theme');
@@ -174,6 +229,10 @@
 			if (importedTheme) theme.set(importedTheme);
 			if (importedConfig) themeConfig.set(importedConfig);
 			if (importedScale !== undefined) textScale.set(importedScale === 1 ? null : importedScale);
+			if (importedBorderContrast !== undefined)
+				borderContrast.set(
+					importedBorderContrast === DEFAULT_BORDER_CONTRAST ? null : importedBorderContrast
+				);
 			if (importedWidescreenMode !== undefined) widescreenMode.set(importedWidescreenMode);
 			toast.success($t('appearance.imported'));
 		} catch {
@@ -275,6 +334,59 @@
 			/>
 		</label>
 
+		<div class="w-full mt-3">
+			<div class="flex items-center gap-2">
+				<span id="border-contrast-label" class="text-xs text-gray-600 dark:text-gray-400">
+					{$t('appearance.borderContrast')}
+				</span>
+				<button
+					type="button"
+					class="ml-auto h-6 px-2 rounded-lg text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors"
+					aria-live="polite"
+					onclick={toggleBorderContrast}
+				>
+					{borderContrastEnabled ? borderContrastLabel(borderContrastDraft) : $t('general.default')}
+				</button>
+			</div>
+			{#if borderContrastEnabled}
+				<div class="flex items-center gap-1.5 pt-1.5">
+					<button
+						type="button"
+						class="flex items-center justify-center w-6 h-6 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors"
+						aria-labelledby="border-contrast-label"
+						aria-label={$t('appearance.decreaseBorderContrast')}
+						onclick={() => setBorderContrastPreference(borderContrastDraft - borderContrastStep)}
+					>
+						<Icon name="minus" size={12} />
+					</button>
+					<input
+						id="border-contrast-slider"
+						class="appearance-range flex-1 min-w-0"
+						type="range"
+						min={DEFAULT_BORDER_CONTRAST}
+						max={MAX_BORDER_CONTRAST}
+						step={borderContrastStep}
+						bind:value={borderContrastDraft}
+						aria-labelledby="border-contrast-label"
+						aria-valuemin={DEFAULT_BORDER_CONTRAST}
+						aria-valuemax={MAX_BORDER_CONTRAST}
+						aria-valuenow={borderContrastDraft}
+						aria-valuetext={borderContrastLabel(borderContrastDraft)}
+						oninput={() => setBorderContrastPreference(borderContrastDraft)}
+					/>
+					<button
+						type="button"
+						class="flex items-center justify-center w-6 h-6 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/6 transition-colors"
+						aria-labelledby="border-contrast-label"
+						aria-label={$t('appearance.increaseBorderContrast')}
+						onclick={() => setBorderContrastPreference(borderContrastDraft + borderContrastStep)}
+					>
+						<Icon name="plus" size={12} />
+					</button>
+				</div>
+			{/if}
+		</div>
+
 		<label class="flex items-center justify-between gap-3 mt-3">
 			<span class="text-xs text-gray-600 dark:text-gray-400">{$t('appearance.widescreenMode')}</span
 			>
@@ -316,7 +428,7 @@
 					</button>
 					<input
 						id="ui-scale-slider"
-						class="ui-scale-range flex-1 min-w-0"
+						class="appearance-range flex-1 min-w-0"
 						type="range"
 						min={minTextScale}
 						max={maxTextScale}
@@ -354,41 +466,40 @@
 		padding: 0.125rem;
 	}
 
-	.ui-scale-range {
+	.appearance-range {
 		appearance: none;
 		height: 1rem;
 		background: transparent;
 		cursor: pointer;
 	}
 
-	.ui-scale-range::-webkit-slider-runnable-track {
-		height: 0.125rem;
+	.appearance-range::-webkit-slider-runnable-track {
+		height: 0.1875rem;
 		border-radius: 624.9375rem;
-		background: var(--app-divider);
+		background: color-mix(in oklab, var(--app-fg) 24%, transparent);
 	}
 
-	.ui-scale-range::-webkit-slider-thumb {
+	.appearance-range::-webkit-slider-thumb {
 		appearance: none;
 		width: 0.75rem;
 		height: 0.75rem;
 		margin-top: -0.3125rem;
 		border-radius: 624.9375rem;
-		border: 1px solid var(--app-border);
-		background: var(--app-bg);
+		border: 1px solid color-mix(in oklab, var(--app-bg) 70%, transparent);
+		background: color-mix(in oklab, var(--app-fg) 82%, var(--app-bg));
 	}
 
-	.ui-scale-range::-moz-range-track {
-		height: 0.125rem;
+	.appearance-range::-moz-range-track {
+		height: 0.1875rem;
 		border-radius: 624.9375rem;
-		background: var(--app-divider);
+		background: color-mix(in oklab, var(--app-fg) 24%, transparent);
 	}
 
-	.ui-scale-range::-moz-range-thumb {
+	.appearance-range::-moz-range-thumb {
 		width: 0.75rem;
 		height: 0.75rem;
 		border-radius: 624.9375rem;
-		border: 1px solid var(--app-border);
-		background: var(--app-bg);
+		border: 1px solid color-mix(in oklab, var(--app-bg) 70%, transparent);
+		background: color-mix(in oklab, var(--app-fg) 82%, var(--app-bg));
 	}
-
 </style>

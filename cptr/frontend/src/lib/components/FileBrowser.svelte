@@ -763,6 +763,7 @@
 		if (draggedItem && (targetDir === draggedItem || targetDir.startsWith(draggedItem + '/')))
 			return;
 		e.preventDefault();
+		e.stopPropagation();
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 
 		if (dragOverDir !== targetDir) {
@@ -821,6 +822,7 @@
 		// Resolve actual target directory (entry itself if dir, or parent expanded dir)
 		const targetDir = resolveDropTarget(entry) ?? (entry.type === 'directory' ? entry.path : null);
 		if (!targetDir) return; // root-level file drop — container handles it
+		e.stopPropagation();
 
 		// Handle file browser item drag (single or multi)
 		if (draggedItem) {

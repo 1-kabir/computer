@@ -34,6 +34,7 @@ import { defaultPwaPreferences, type PwaPreferences } from '$lib/intents/types';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import {
 	applyAppearance,
+	normalizeBorderContrast,
 	sanitizeThemeConfig,
 	type AppearancePreferences,
 	type Theme,
@@ -326,6 +327,7 @@ export const streamingBehavior = writable<StreamingBehavior>('queue');
 export const pwaPreferences = writable<PwaPreferences>(defaultPwaPreferences);
 export const themeConfig = writable<ThemeConfig | null>(null);
 export const textScale = writable<number | null>(null);
+export const borderContrast = writable<number | null>(null);
 export const widescreenMode = writable(false);
 export const expandToolDetails = writable(false);
 
@@ -422,7 +424,8 @@ function persistPreferences(): void {
 			appearance: {
 				theme: get(theme),
 				themeConfig: sanitizeThemeConfig(get(themeConfig)),
-				textScale: get(textScale)
+				textScale: get(textScale),
+				borderContrast: get(borderContrast)
 			},
 			sidebarOpen: get(sidebarOpen),
 			sidebarWidth: get(sidebarWidth),
@@ -485,6 +488,9 @@ function subscribeForPersistence() {
 	textScale.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
+	borderContrast.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
 	widescreenMode.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
@@ -529,6 +535,10 @@ export async function loadPreferences(): Promise<void> {
 				: typeof prefs.textScale === 'number'
 					? (prefs.textScale as number)
 					: null
+		);
+		borderContrast.set(
+			normalizeBorderContrast(appearance.borderContrast) ??
+				(appearance.highContrastBorders === true ? 12 : null)
 		);
 		if (prefs.widescreenMode !== undefined) widescreenMode.set(prefs.widescreenMode as boolean);
 		if (prefs.expandToolDetails !== undefined)
@@ -749,12 +759,13 @@ export const loadStateFromServer = initState;
 // ── Appearance application ──────────────────────────────────────
 
 function applyCurrentAppearance() {
-	applyAppearance(get(theme), get(themeConfig), get(textScale));
+	applyAppearance(get(theme), get(themeConfig), get(textScale), get(borderContrast));
 }
 
 theme.subscribe(applyCurrentAppearance);
 themeConfig.subscribe(applyCurrentAppearance);
 textScale.subscribe(applyCurrentAppearance);
+borderContrast.subscribe(applyCurrentAppearance);
 
 if (typeof window !== 'undefined') {
 	window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -781,6 +792,10 @@ if (typeof BroadcastChannel !== 'undefined') {
 				if (value.theme) theme.set(value.theme);
 				themeConfig.set(sanitizeThemeConfig(value.themeConfig));
 				textScale.set(typeof value.textScale === 'number' ? value.textScale : null);
+				borderContrast.set(
+					normalizeBorderContrast(value.borderContrast) ??
+						(value.highContrastBorders === true ? 12 : null)
+				);
 			} else if (type === 'locale' && value) {
 				changeLocale(value);
 			}
@@ -794,7 +809,12 @@ if (typeof BroadcastChannel !== 'undefined') {
 			channel.postMessage({ type: 'theme', value: t });
 			channel.postMessage({
 				type: 'appearance',
-				value: { theme: t, themeConfig: get(themeConfig), textScale: get(textScale) }
+				value: {
+					theme: t,
+					themeConfig: get(themeConfig),
+					textScale: get(textScale),
+					borderContrast: get(borderContrast)
+				}
 			});
 		}
 	});
@@ -803,7 +823,12 @@ if (typeof BroadcastChannel !== 'undefined') {
 		if (!_syncingFromBroadcast) {
 			channel.postMessage({
 				type: 'appearance',
-				value: { theme: get(theme), themeConfig: config, textScale: get(textScale) }
+				value: {
+					theme: get(theme),
+					themeConfig: config,
+					textScale: get(textScale),
+					borderContrast: get(borderContrast)
+				}
 			});
 		}
 	});
@@ -812,7 +837,26 @@ if (typeof BroadcastChannel !== 'undefined') {
 		if (!_syncingFromBroadcast) {
 			channel.postMessage({
 				type: 'appearance',
-				value: { theme: get(theme), themeConfig: get(themeConfig), textScale: scale }
+				value: {
+					theme: get(theme),
+					themeConfig: get(themeConfig),
+					textScale: scale,
+					borderContrast: get(borderContrast)
+				}
+			});
+		}
+	});
+
+	borderContrast.subscribe((contrast) => {
+		if (!_syncingFromBroadcast) {
+			channel.postMessage({
+				type: 'appearance',
+				value: {
+					theme: get(theme),
+					themeConfig: get(themeConfig),
+					textScale: get(textScale),
+					borderContrast: contrast
+				}
 			});
 		}
 	});

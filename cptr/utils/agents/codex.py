@@ -21,6 +21,7 @@ from cptr.utils.agents.events import (
     AgentToolOutputDelta,
     AgentToolUpdate,
 )
+from cptr.utils.agents.prompts import latest_user_text
 
 CODEX_STDOUT_CHUNK_SIZE = 64 * 1024
 CODEX_MAX_WIRE_MESSAGE_CHARS = 16 * 1024 * 1024
@@ -209,22 +210,6 @@ class CodexAppServer:
         return "Codex app-server exited."
 
 
-def _messages_to_prompt(messages: list[dict[str, Any]]) -> str:
-    parts: list[str] = []
-    for message in messages:
-        role = message.get("role", "user")
-        content = message.get("content", "")
-        if isinstance(content, list):
-            text = "\n".join(
-                str(block.get("text", "")) for block in content if isinstance(block, dict)
-            )
-        else:
-            text = str(content or "")
-        if text:
-            parts.append(f"[{role}]\n{text}")
-    return "\n\n".join(parts)
-
-
 def _approval_policy(value: str) -> str:
     return {"ask": "on-request", "auto": "on-failure", "full": "never"}.get(value, "on-failure")
 
@@ -252,6 +237,34 @@ def _codex_turn_options(chat_params: dict[str, Any]) -> dict[str, str]:
     if isinstance(service_tier, str) and service_tier.strip():
         options["serviceTier"] = service_tier.strip()
     return options
+
+
+def _resume_thread_id(resume_state: dict[str, Any] | None) -> str | None:
+    if not resume_state:
+        return None
+    value = resume_state.get("thread_id")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+async def _open_thread(
+    client: CodexAppServer,
+    thread_params: dict[str, Any],
+    resume_state: dict[str, Any] | None,
+) -> str | None:
+    thread_id = _resume_thread_id(resume_state)
+    if thread_id:
+        try:
+            response = await client.request(
+                "thread/resume", {"threadId": thread_id, **thread_params}
+            )
+        except RuntimeError:
+            response = await client.request("thread/start", thread_params)
+    else:
+        response = await client.request("thread/start", thread_params)
+
+    thread = response.get("result", {}).get("thread", {})
+    value = thread.get("id") if isinstance(thread, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def _tool_from_item_event(method: str, params: dict[str, Any]) -> AgentToolUpdate | None:
@@ -357,14 +370,12 @@ async def run_codex_agent(
         if system_prompt:
             thread_params["developerInstructions"] = system_prompt
 
-        response = await client.request("thread/start", thread_params)
-        thread = response.get("result", {}).get("thread", {})
-        thread_id = thread.get("id") if isinstance(thread, dict) else None
+        thread_id = await _open_thread(client, thread_params, resume_state)
         if not thread_id:
             yield AgentError("Codex did not return a thread id")
             return
 
-        prompt = _messages_to_prompt(messages)
+        prompt = latest_user_text(messages)
         turn_input: list[dict[str, Any]] = []
         if prompt:
             turn_input.append({"type": "text", "text": prompt})
