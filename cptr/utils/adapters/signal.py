@@ -13,6 +13,7 @@ and POST /v2/send for outbound messages.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 from typing import Any, Optional
 from urllib.parse import quote
@@ -222,7 +223,14 @@ class SignalAdapter(BaseAdapter):
 
         # Use source number as chat_id (DM) or groupId for groups
         group_info = data_message.get("groupInfo")
-        chat_id = group_info.get("groupId", "") if group_info else source
+        chat_id = source
+        if group_info:
+            group_id = group_info.get("groupId", "")
+            chat_id = group_info.get("id") or (
+                "group." + base64.b64encode(group_id.encode("utf-8")).decode("ascii")
+                if group_id
+                else source
+            )
 
         event = MessageEvent(
             platform="signal",
@@ -265,7 +273,6 @@ class SignalAdapter(BaseAdapter):
         """Send a message with a base64-encoded attachment via signal-cli."""
         if not self._http:
             return None
-        import base64
         try:
             resp = await self._http.post(
                 f"{self._base_url}/v2/send",

@@ -171,7 +171,7 @@ async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
         return AgentDetection("ready", command, version, None, models)
 
     if profile.get("agent") == "gemini":
-        models = await _probe_acp_models(command, profile)
+        models = await _probe_acp_models(command, profile, auth_method_id="oauth-personal")
         if not models:
             return AgentDetection(
                 "auth_unknown",
@@ -456,7 +456,11 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
                 await proc.wait()
 
 
-async def _probe_acp_models(command: str, profile: dict[str, Any]) -> list[str] | None:
+async def _probe_acp_models(
+    command: str,
+    profile: dict[str, Any],
+    auth_method_id: str | None = None,
+) -> list[str] | None:
     from cptr.utils.agents.acp import AcpClient, acp_models_from_setup
 
     env = os.environ.copy()
@@ -467,7 +471,7 @@ async def _probe_acp_models(command: str, profile: dict[str, Any]) -> list[str] 
         args=["--acp"],
         cwd=os.getcwd(),
         env=env,
-        auth_method_id=None,
+        auth_method_id=auth_method_id,
     )
     try:
         await asyncio.wait_for(client.start(), timeout=10)

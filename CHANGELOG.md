@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.11] - 2026-07-19
+
+### Added
+
+- 🤖 **Gemini is now its own coding agent.** Choose Gemini as an agent and Computer will start the Gemini CLI with its Google sign-in flow, keep the chat resumable, and handle image attachments like the other coding agents.
+
+### Fixed
+
+- 📱 **Signal group chats reply to the right group.** When a Signal group message reaches Computer, replies, typing indicators, and attachments now use the group address Signal expects instead of falling back to the sender or losing the group target.
+
 ## [0.9.10] - 2026-07-18
 
 ### Added
