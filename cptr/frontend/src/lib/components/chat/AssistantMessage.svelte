@@ -549,7 +549,7 @@
 										if (filePath) openFileTab(filePath);
 									}}
 									aria-label={$t('directory.open', { name: file.name || shortPath(file.path) })}
-									use:tooltip={'Open as tab'}
+									use:tooltip={$t('chat.openAsTab')}
 								>
 									<Icon name="external-link" size={13} />
 								</button>

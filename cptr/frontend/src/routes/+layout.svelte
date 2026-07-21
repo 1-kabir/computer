@@ -12,6 +12,7 @@
 	import SettingsModal from '$lib/components/SettingsModal.svelte';
 	import AuthScreen from '$lib/components/AuthScreen.svelte';
 	import ChangelogModal from '$lib/components/ChangelogModal.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import UpdateToast from '$lib/components/UpdateToast.svelte';
 	import { Toaster, toast } from 'svelte-sonner';
 	import {
@@ -507,3 +508,4 @@
 		style: 'font-size: 0.75rem; font-family: var(--font-sans); border-radius: 0.5rem;'
 	}}
 />
+<ConfirmDialog />

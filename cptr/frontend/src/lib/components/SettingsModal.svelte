@@ -104,7 +104,7 @@
 		{ id: 'subagents', label: $t('admin.subagents'), icon: 'user' },
 		{ id: 'workspace', label: $t('admin.workspace'), icon: 'folder' },
 		{ id: 'memory', label: $t('settings.memory'), icon: 'brain' },
-		{ id: 'skills', label: 'Skills', icon: 'spark' }
+		{ id: 'skills', label: $t('chat.skills'), icon: 'spark' }
 	]);
 
 	onMount(() => {

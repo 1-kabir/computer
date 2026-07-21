@@ -51,7 +51,10 @@
 	let firecrawlBaseUrl = $state('https://api.firecrawl.dev');
 	let browserUseApiKey = $state('');
 	let browserUseBaseUrl = $state('https://api.browser-use.com');
+	type BrowserEncoderHardwareAcceleration = 'no-preference' | 'prefer-hardware' | 'prefer-software';
 	let browserQualityDefault = $state<'low' | 'balanced' | 'crisp'>('balanced');
+	let browserEncoderHardwareAcceleration =
+		$state<BrowserEncoderHardwareAcceleration>('no-preference');
 	let browserQualityProfiles = $state({
 		low: { bitrate: 3000000, frame_rate: 15 },
 		balanced: { bitrate: 6000000, frame_rate: 24 },
@@ -118,6 +121,14 @@
 			}
 			browserQualityMaxResolution = Number(config['browser.quality.max_resolution']) || 1080;
 			browserQualityMaxBitrate = Number(config['browser.quality.max_bitrate']) || 12000000;
+			if (
+				config['browser.encoder.hardware_acceleration'] === 'prefer-hardware' ||
+				config['browser.encoder.hardware_acceleration'] === 'prefer-software'
+			) {
+				browserEncoderHardwareAcceleration = config[
+					'browser.encoder.hardware_acceleration'
+				] as BrowserEncoderHardwareAcceleration;
+			}
 		} catch {
 			toast.error($t('admin.failedToLoadConfig'));
 		}
@@ -159,6 +170,7 @@
 				'browser.browser_use_api_key': browserUseApiKey,
 				'browser.browser_use_base_url': browserUseBaseUrl,
 				'browser.quality.default': browserQualityDefault,
+				'browser.encoder.hardware_acceleration': browserEncoderHardwareAcceleration,
 				'browser.quality.profiles': browserQualityProfiles,
 				'browser.quality.max_resolution': browserQualityMaxResolution,
 				'browser.quality.max_bitrate': browserQualityMaxBitrate
@@ -571,7 +583,9 @@
 											class="h-7 w-24 rounded-lg border border-gray-200 bg-gray-100 px-2 text-xs text-gray-700 outline-none dark:border-white/8 dark:bg-white/6 dark:text-gray-300"
 										/>
 										<datalist id="browser-quality-heights">
-											<option value="720"></option><option value="1080"></option><option value="1440"></option><option value="2160"></option>
+											<option value="720"></option><option value="1080"></option><option
+												value="1440"
+											></option><option value="2160"></option>
 										</datalist>
 									</div>
 									<div class="flex items-center justify-between gap-4">
@@ -586,6 +600,30 @@
 											bind:value={browserQualityMaxBitrate}
 											class="h-7 w-24 rounded-lg border border-gray-200 bg-gray-100 px-2 text-xs text-gray-700 outline-none dark:border-white/8 dark:bg-white/6 dark:text-gray-300"
 										/>
+									</div>
+									<div class="flex items-center justify-between gap-4">
+										<div>
+											<span class="text-xs text-gray-600 dark:text-gray-400"
+												>{$t('admin.browserEncoderHardwareAcceleration')}</span
+											>
+											<p class="text-[0.625rem] text-gray-400 dark:text-gray-600">
+												{$t('admin.browserEncoderHardwareAccelerationHint')}
+											</p>
+										</div>
+										<select
+											bind:value={browserEncoderHardwareAcceleration}
+											class="cursor-pointer bg-transparent text-xs text-gray-600 outline-none dark:text-gray-400"
+										>
+											<option value="no-preference"
+												>{$t('admin.browserEncoderAccelerationAuto')}</option
+											>
+											<option value="prefer-hardware"
+												>{$t('admin.browserEncoderAccelerationHardware')}</option
+											>
+											<option value="prefer-software"
+												>{$t('admin.browserEncoderAccelerationSoftware')}</option
+											>
+										</select>
 									</div>
 								</div>
 							</Collapsible>

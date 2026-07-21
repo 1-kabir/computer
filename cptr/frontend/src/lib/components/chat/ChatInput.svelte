@@ -1177,9 +1177,9 @@
 			{#if slashCommandIds.includes('compact')}
 				<button
 					type="button"
-					aria-label="Compact: shorten older messages so this chat can keep going."
+					aria-label={`${$t('chat.commandCompact')}: ${$t('chat.commandCompactDesc')}`}
 					use:tooltip={{
-						content: 'Shorten older messages so this chat can keep going.',
+						content: $t('chat.commandCompactDesc'),
 						placement: 'top'
 					}}
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
@@ -1226,9 +1226,9 @@
 			{#if slashCommandIds.includes('plan')}
 				<button
 					type="button"
-					aria-label="Plan: work out a plan first, then wait before changing files."
+					aria-label={`${$t('chat.commandPlan')}: ${$t('chat.commandPlanDesc')}`}
 					use:tooltip={{
-						content: 'Work out a plan first, then wait before changing files.',
+						content: $t('chat.commandPlanDesc'),
 						placement: 'top'
 					}}
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
@@ -1267,9 +1267,9 @@
 			{#if slashCommandIds.includes('fork')}
 				<button
 					type="button"
-					aria-label="Fork: clone this chat into a new copy."
+					aria-label={`${$t('chat.commandFork')}: ${$t('chat.commandForkDesc')}`}
 					use:tooltip={{
-						content: 'Clone this chat into a new copy.',
+						content: $t('chat.commandForkDesc'),
 						placement: 'top'
 					}}
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
@@ -1295,9 +1295,9 @@
 			{#if slashCommandIds.includes('status')}
 				<button
 					type="button"
-					aria-label="Status: check what is running in this chat."
+					aria-label={`${$t('chat.commandStatus')}: ${$t('chat.commandStatusDesc')}`}
 					use:tooltip={{
-						content: 'Check what is running in this chat.',
+						content: $t('chat.commandStatusDesc'),
 						placement: 'top'
 					}}
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
@@ -1334,9 +1334,9 @@
 			{#if slashCommandIds.includes('skills:list')}
 				<button
 					type="button"
-					aria-label="List skills: see the skills available in this workspace."
+					aria-label={`${$t('chat.commandListSkills')}: ${$t('chat.commandListSkillsDesc')}`}
 					use:tooltip={{
-						content: 'See the skills available in this workspace.',
+						content: $t('chat.commandListSkillsDesc'),
 						placement: 'top'
 					}}
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
@@ -1351,7 +1351,7 @@
 						<Icon name="list" size={14} />
 					</span>
 					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
-						<span class="truncate">List skills</span>
+						<span class="truncate">{$t('chat.commandListSkills')}</span>
 						<span class="app-muted text-[0.625rem] truncate shrink-0">/skills:list</span>
 					</span>
 				</button>
@@ -1359,9 +1359,9 @@
 			{#if slashCommandIds.includes('skills:create')}
 				<button
 					type="button"
-					aria-label="Create skill: teach Computer a reusable workflow."
+					aria-label={`${$t('chat.commandCreateSkill')}: ${$t('chat.commandCreateSkillDesc')}`}
 					use:tooltip={{
-						content: 'Teach Computer a reusable workflow.',
+						content: $t('chat.commandCreateSkillDesc'),
 						placement: 'top'
 					}}
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
@@ -1376,17 +1376,19 @@
 						<Icon name="plus" size={14} />
 					</span>
 					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
-						<span class="truncate">Create skill</span>
+						<span class="truncate">{$t('chat.commandCreateSkill')}</span>
 						<span class="app-muted text-[0.625rem] truncate shrink-0">/skills:create</span>
 					</span>
 				</button>
 			{/if}
 			{#if slashSkillSuggestions.length > 0}
-				<div class="app-muted mb-0.5 px-2 pt-1 pb-0.5 text-[0.625rem] leading-none">Skills</div>
+				<div class="app-muted mb-0.5 px-2 pt-1 pb-0.5 text-[0.625rem] leading-none">
+					{$t('chat.skills')}
+				</div>
 				{#each slashSkillSuggestions as skill (skill.id)}
 					<button
 						type="button"
-						aria-label={`Use skill: ${skill.label}`}
+						aria-label={`${$t('chat.useSkill')}: ${skill.label}`}
 						use:tooltip={{
 							content: skill.label,
 							placement: 'top'

@@ -32,6 +32,7 @@ PERSONAL_VIEWER_ID = "personal"
 EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 QUALITY_PRESETS = ("low", "balanced", "crisp")
+ENCODER_HARDWARE_ACCELERATION = ("no-preference", "prefer-hardware", "prefer-software")
 DEFAULT_QUALITY_PROFILES = {
     "low": {"bitrate": 3_000_000, "frame_rate": 15},
     "balanced": {"bitrate": 6_000_000, "frame_rate": 24},
@@ -616,8 +617,17 @@ class ChromeViewerManager:
             base = local_origin(origin)
             ws_scheme = "wss" if base.startswith("https:") else "ws"
             ws_url = f"{ws_scheme}://{urlsplit(base).netloc}/api/browser/sessions/{session.session_id}/encoder"
+            hardware_acceleration = await Config.get("browser.encoder.hardware_acceleration")
+            if hardware_acceleration not in ENCODER_HARDWARE_ACCELERATION:
+                hardware_acceleration = "no-preference"
             fragment = urlencode(
-                {"session": session.session_id, "token": token, "ws": ws_url, "audio": "1"}
+                {
+                    "session": session.session_id,
+                    "token": token,
+                    "ws": ws_url,
+                    "audio": "1",
+                    "hardwareAcceleration": hardware_acceleration,
+                }
             )
             controller_url = f"{base}/browser-encoder.html#{fragment}"
             controller_id, controller_cdp = await host.create_target(controller_url)
@@ -684,7 +694,17 @@ class ChromeViewerManager:
             base = local_origin(origin)
             ws_scheme = "wss" if base.startswith("https:") else "ws"
             ws_url = f"{ws_scheme}://{urlsplit(base).netloc}/api/browser/sessions/personal/encoder"
-            fragment = urlencode({"token": token, "ws": ws_url, "window": "1"})
+            hardware_acceleration = await Config.get("browser.encoder.hardware_acceleration")
+            if hardware_acceleration not in ENCODER_HARDWARE_ACCELERATION:
+                hardware_acceleration = "no-preference"
+            fragment = urlencode(
+                {
+                    "token": token,
+                    "ws": ws_url,
+                    "window": "1",
+                    "hardwareAcceleration": hardware_acceleration,
+                }
+            )
             controller_id, controller_cdp = await host.create_target(
                 f"{base}/browser-encoder.html#{fragment}", new_window=True
             )
@@ -1041,12 +1061,16 @@ class ChromeViewerManager:
                     f"{ws_scheme}://{urlsplit(base).netloc}/api/browser/sessions/"
                     f"{viewer.session.session_id}/encoder"
                 )
+                hardware_acceleration = await Config.get("browser.encoder.hardware_acceleration")
+                if hardware_acceleration not in ENCODER_HARDWARE_ACCELERATION:
+                    hardware_acceleration = "no-preference"
                 fragment = urlencode(
                     {
                         "session": viewer.session.session_id,
                         "token": viewer.encoder_token,
                         "ws": ws_url,
                         "audio": "1",
+                        "hardwareAcceleration": hardware_acceleration,
                     }
                 )
                 viewer.controller_id, viewer.controller_cdp = await viewer.host.create_target(

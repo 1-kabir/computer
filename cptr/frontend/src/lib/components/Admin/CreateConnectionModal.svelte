@@ -122,14 +122,14 @@
 				for="create-provider-type"
 				class="text-[0.625rem] text-gray-400 dark:text-gray-600 mt-2"
 			>
-				Provider Type
+				{$t('connections.providerType')}
 			</label>
 			<select
 				id="create-provider-type"
 				bind:value={formProviderType}
 				class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 outline-none py-0.5 cursor-pointer"
 			>
-				<option value="default">Default</option>
+				<option value="default">{$t('general.default')}</option>
 				<option value="llama.cpp">llama.cpp</option>
 			</select>
 		{/if}

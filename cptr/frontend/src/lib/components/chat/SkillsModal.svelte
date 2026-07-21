@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { SkillInfo } from '$lib/apis/skills';
+	import { t } from '$lib/i18n';
 	import Modal from '../Modal.svelte';
 	import Icon from '../Icon.svelte';
 
@@ -22,10 +23,10 @@
 			onclick={onclose}
 		>
 			<Icon name="chevron-left" size={12} />
-			<span>Close</span>
+			<span>{$t('common.close')}</span>
 		</button>
 		<div class="min-w-0 flex-1 truncate text-xs font-medium text-gray-900 dark:text-white">
-			Skills
+			{$t('chat.skills')}
 		</div>
 	</div>
 
@@ -39,7 +40,7 @@
 								{item.name}
 							</div>
 							<div class="shrink-0 text-[0.625rem] text-gray-400 dark:text-gray-600">
-								{item.managed ? 'managed' : 'read-only'}
+								{item.managed ? $t('chat.skillManaged') : $t('chat.skillReadOnly')}
 							</div>
 						</div>
 						<div class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-gray-500 dark:text-gray-400">
@@ -49,7 +50,9 @@
 				{/each}
 			</div>
 		{:else}
-			<div class="py-8 text-center text-gray-400 dark:text-gray-600">No skills found</div>
+			<div class="py-8 text-center text-gray-400 dark:text-gray-600">
+				{$t('chat.noSkillsFound')}
+			</div>
 		{/if}
 	</div>
 </Modal>

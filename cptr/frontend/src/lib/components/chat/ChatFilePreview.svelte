@@ -8,6 +8,7 @@
 	import OfficePreview from '$lib/components/preview/OfficePreview.svelte';
 	import PDFViewer from '$lib/components/preview/PDFViewer.svelte';
 	import SvgPreview from '$lib/components/preview/SvgPreview.svelte';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		file: any;
@@ -59,7 +60,7 @@
 					}
 				}
 			} catch (e: any) {
-				if (!cancelled) error = e.message || 'Failed to load preview';
+				if (!cancelled) error = e.message || $t('preview.failedToLoad');
 			} finally {
 				if (!cancelled) loading = false;
 			}
@@ -73,7 +74,7 @@
 </script>
 
 {#if loading}
-	<div class="preview-state">Loading...</div>
+	<div class="preview-state">{$t('common.loading')}</div>
 {:else if error}
 	<div class="preview-state">{error}</div>
 {:else if kind === 'image'}

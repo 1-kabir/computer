@@ -28,6 +28,7 @@ import {
 import { listSessions, createSession, deleteSession } from '$lib/apis/terminal';
 import { createBrowserSession, deleteBrowserSession, listBrowserSessions } from '$lib/apis/browser';
 import { changeLocale, i18next } from '$lib/i18n';
+import { requestConfirm } from '$lib/stores/confirm';
 import { streamingChatTabs } from '$lib/stores/chat';
 import { keybindings, loadKeybindings } from '$lib/stores/keybindings';
 import { defaultPwaPreferences, type PwaPreferences } from '$lib/intents/types';
@@ -1176,7 +1177,7 @@ export async function openBrowserTab(
 	} catch (error) {
 		console.error('Failed to create browser session:', error);
 		toast.error(error instanceof Error ? error.message : 'Failed to open Browser');
-		closeTab(tabId, gid);
+		closeTab(tabId, gid, { skipUnsavedPrompt: true });
 	}
 }
 
@@ -1219,18 +1220,39 @@ export function openChatTab(chatId?: string, targetGroupId?: string): void {
 	}));
 }
 
-export function closeTab(tabId: string, groupId?: string): void {
+export async function closeTab(
+	tabId: string,
+	groupId?: string,
+	options: { skipUnsavedPrompt?: boolean } = {}
+): Promise<boolean> {
 	const ws = get(currentWorkspace);
-	if (!ws) return;
+	if (!ws) return false;
 
 	// Find the group containing this tab
 	const gid =
 		groupId ?? ws.groups.find((g) => g.tabs.some((t) => t.id === tabId))?.id ?? ws.activeGroupId;
 	const group = ws.groups.find((g) => g.id === gid);
-	if (!group) return;
+	if (!group) return false;
 
 	const tab = group.tabs.find((t) => t.id === tabId);
-	if (!tab || tab.permanent) return;
+	if (!tab || tab.permanent) return false;
+
+	if (tab.unsaved && !options.skipUnsavedPrompt) {
+		const confirmed = await requestConfirm({
+			title: i18next.t('editor.closeUnsavedTitle', {
+				defaultValue: 'Unsaved changes'
+			}),
+			message: i18next.t('editor.closeUnsavedConfirm', {
+				name: tab.label,
+				defaultValue: 'Close "{{name}}" without saving changes?'
+			}),
+			cancelLabel: i18next.t('common.cancel', { defaultValue: 'Cancel' }),
+			confirmLabel: i18next.t('editor.closeWithoutSaving', {
+				defaultValue: 'Close without saving'
+			})
+		});
+		if (!confirmed) return false;
+	}
 
 	if (tab.type === 'terminal' && tab.sessionId) {
 		deleteSession(tab.sessionId);
@@ -1296,6 +1318,7 @@ export function closeTab(tabId: string, groupId?: string): void {
 			activeGroupId: activeGroupStillExists ? ws.activeGroupId : newGroups[0].id
 		};
 	});
+	return true;
 }
 
 export function setActiveTab(tabId: string, groupId?: string): void {

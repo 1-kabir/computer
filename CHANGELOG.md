@@ -5,11 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.12] - 2026-07-21
+
+### Added
+
+- 📱 **Unsaved file edits now get a proper warning.** Closing an edited file tab now shows Computer's own confirmation dialog, so mobile users and desktop users can choose to keep editing or close without saving.
+- 🎛️ **Browser streaming now has an encoder setting.** Admins can leave streaming on Auto, force hardware encoding, or force software encoding from Admin > Web > Streaming quality > Advanced.
+
+### Changed
+
+- 🌍 **More of Computer is translated.** Admin screens, chat controls, diff settings, file editor labels, skill controls, and planning prompts now use the same language as the rest of the app across all supported languages.
+- 📜 **The license is clearer for hosted use.** The old multi-tenant hosting restriction was removed while the attribution requirements remain in place.
+
+### Fixed
+
+- 🌐 **Browser tabs work on servers without video hardware.** Streaming now defaults to Auto, so headless servers, virtual machines, and other GPU-light hosts can fall back to software encoding instead of failing to open the browser stream.
+- 🤖 **Claude Code appears when it comes from the Claude desktop app.** If Claude Code was installed through Claude desktop on macOS or Windows, Computer can now find it automatically and show it as an available coding agent.
+
 ## [0.9.11] - 2026-07-19
 
 ### Added
 
-- 🤖 **Gemini is now its own coding agent.** Choose Gemini as an agent and Computer will start the Gemini CLI with its Google sign-in flow, keep the chat resumable, and handle image attachments like the other coding agents.
+- 🤖 **Gemini is now its own coding agent.** Choose Gemini as an agent and Computer will start it with its Google sign-in flow, keep the chat resumable, and handle image attachments like the other coding agents.
 
 ### Fixed
 

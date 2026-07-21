@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import { t } from '$lib/i18n';
 
 	interface BrowserState {
 		url: string;
@@ -652,7 +653,7 @@
 	<textarea
 		bind:this={keyboardAntenna}
 		class="keyboard-antenna"
-		aria-label="Remote browser keyboard"
+		aria-label={$t('browser.remoteKeyboard')}
 		onbeforeinput={beforeInput}
 		oncompositionstart={() => (composition = true)}
 		oncompositionupdate={() => {}}

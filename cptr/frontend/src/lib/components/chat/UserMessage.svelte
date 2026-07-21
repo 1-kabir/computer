@@ -134,7 +134,7 @@
 				aria-expanded={timerExpanded}
 				onclick={() => (timerExpanded = !timerExpanded)}
 			>
-				<span class="text-[0.75rem] font-medium shrink-0">Timer</span>
+				<span class="text-[0.75rem] font-medium shrink-0">{$t('chat.timer')}</span>
 				<span class="text-[0.75rem] truncate min-w-0 flex-1">{content}</span>
 				<Icon
 					name="chevron-down"

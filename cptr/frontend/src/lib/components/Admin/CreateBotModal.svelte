@@ -78,7 +78,7 @@
 		try {
 			verifyResult = await verifyBotToken(platform, token.trim());
 		} catch (e: any) {
-			verifyResult = { ok: false, error: e.message || 'Verification failed' };
+			verifyResult = { ok: false, error: e.message || $t('messaging.verificationFailed') };
 		} finally {
 			verifying = false;
 		}
@@ -149,7 +149,7 @@
 					<input
 						type="text"
 						bind:value={name}
-						placeholder="My Bot"
+						placeholder={$t('messaging.namePlaceholder')}
 						autofocus
 						autocomplete="off"
 						spellcheck="false"
@@ -181,7 +181,7 @@
 			<input
 				type="text"
 				bind:value={name}
-				placeholder="My Bot"
+				placeholder={$t('messaging.namePlaceholder')}
 				autofocus
 				autocomplete="off"
 				spellcheck="false"
@@ -191,7 +191,8 @@
 
 		<!-- Token -->
 		<label class="text-[0.625rem] text-gray-400 dark:text-gray-600">
-			Token {#if bot}<span class="text-gray-300 dark:text-gray-700">({bot.token_masked})</span>{/if}
+			{$t('messaging.token')}
+			{#if bot}<span class="text-gray-300 dark:text-gray-700">({bot.token_masked})</span>{/if}
 		</label>
 		<div class="flex gap-2 items-center mb-0.5">
 			<input

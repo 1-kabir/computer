@@ -229,8 +229,8 @@
 				bind:this={diffSettingsButtonEl}
 				class="flex h-6 w-6 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/6 dark:hover:text-gray-300"
 				onclick={() => (showDiffSettings = true)}
-				aria-label="Diff settings"
-				use:tooltip={'Diff settings'}
+				aria-label={$t('diff.settings')}
+				use:tooltip={$t('diff.settings')}
 			>
 				<Icon name="settings" size={13} />
 			</button>

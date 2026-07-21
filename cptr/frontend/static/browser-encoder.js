@@ -2,6 +2,11 @@
   const params = new URLSearchParams(location.hash.slice(1));
   const windowCapture = params.get('window') === '1';
   const audioEnabled = params.get('audio') === '1';
+  const accelerationOptions = new Set(['no-preference', 'prefer-hardware', 'prefer-software']);
+  const requestedAcceleration = params.get('hardwareAcceleration') || 'no-preference';
+  const hardwareAcceleration = accelerationOptions.has(requestedAcceleration)
+    ? requestedAcceleration
+    : 'no-preference';
   let socket;
   let encoder;
   let audioEncoder;
@@ -65,7 +70,7 @@
   }
 
   async function configure(width, height) {
-    const key = `${width}x${height}:${quality.bitrate}:${quality.frame_rate}`;
+    const key = `${width}x${height}:${quality.bitrate}:${quality.frame_rate}:${hardwareAcceleration}`;
     if (configured === key) return;
     const config = {
       codec: 'avc1.42E028',
@@ -73,12 +78,12 @@
       height,
       bitrate: quality.bitrate,
       framerate: quality.frame_rate,
-      hardwareAcceleration: 'prefer-hardware',
+      hardwareAcceleration,
       latencyMode: 'realtime',
       avc: { format: 'annexb' }
     };
     const support = await VideoEncoder.isConfigSupported(config);
-    if (!support.supported) throw new Error(`H.264 WebCodecs encoding is unavailable at ${width}×${height}; lower Admin > Web > Streaming quality > Advanced > Max height`);
+    if (!support.supported) throw new Error(`H.264 WebCodecs encoding is unavailable at ${width}×${height} with ${hardwareAcceleration}; lower Admin > Web > Streaming quality > Advanced > Max height or change encoder acceleration`);
     if (encoder) {
       try { await encoder.flush(); } catch {}
       encoder.close();

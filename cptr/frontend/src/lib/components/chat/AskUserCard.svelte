@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { t } from '$lib/i18n';
+
 	interface Props {
 		item: any;
 		pairedOutput: any;
@@ -73,14 +75,17 @@
 <section class="my-1 rounded-2xl bg-gray-100/70 px-3.5 py-3 dark:bg-white/[0.055]">
 	<div class="mb-3 flex items-center justify-between gap-3">
 		<div class="text-[0.6875rem] font-medium tracking-wide text-gray-500 dark:text-gray-400">
-			Planning question
+			{$t('chat.planningQuestion')}
 		</div>
 		{#if pending}
 			<div class="text-[0.6875rem] text-gray-500 dark:text-gray-400">
-				{questionIndex + 1} of {questions.length} · paused while visible
+				{$t('chat.questionProgress', { current: questionIndex + 1, total: questions.length })} ·
+				{$t('chat.pausedWhileVisible')}
 			</div>
 		{:else if item.timed_out || resolved.timed_out}
-			<div class="text-[0.6875rem] text-gray-500 dark:text-gray-400">Recommendations used</div>
+			<div class="text-[0.6875rem] text-gray-500 dark:text-gray-400">
+				{$t('chat.recommendationsUsed')}
+			</div>
 		{/if}
 	</div>
 
@@ -130,7 +135,7 @@
 										<span class="text-gray-800 dark:text-gray-100">{option.label}</span>
 										{#if optionIndex === 0}
 											<span class="ml-1.5 text-[0.625rem] text-gray-400 dark:text-gray-500"
-												>Recommended</span
+												>{$t('chat.recommended')}</span
 											>
 										{/if}
 										<span class="mt-0.5 block leading-relaxed text-gray-500 dark:text-gray-400">
@@ -165,12 +170,12 @@
 										<span class="size-1.5 rounded-full bg-gray-900 dark:bg-white"></span>
 									{/if}
 								</span>
-								<span class="text-gray-700 dark:text-gray-200">Other</span>
+								<span class="text-gray-700 dark:text-gray-200">{$t('chat.other')}</span>
 							</label>
 							{#if selections[question.id] === '__other__'}
 								<input
 									class="w-full rounded-xl bg-transparent px-2.5 py-1.5 text-xs text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
-									placeholder="Type your answer"
+									placeholder={$t('chat.typeYourAnswer')}
 									value={otherAnswers[question.id] || ''}
 									oninput={(event) =>
 										(otherAnswers = { ...otherAnswers, [question.id]: event.currentTarget.value })}
@@ -179,7 +184,7 @@
 						</div>
 					{:else}
 						<div class="text-xs leading-relaxed text-gray-600 dark:text-gray-300">
-							{resolved.answers?.[question.id]?.answers?.join(', ') || 'No answer recorded'}
+							{resolved.answers?.[question.id]?.answers?.join(', ') || $t('chat.noAnswerRecorded')}
 						</div>
 					{/if}
 				</div>
@@ -193,7 +198,7 @@
 				disabled={questionIndex === 0}
 				onclick={() => (questionIndex -= 1)}
 			>
-				Previous
+				{$t('chat.previous')}
 			</button>
 			{#if questionIndex < questions.length - 1}
 				<button
@@ -201,7 +206,7 @@
 					class="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition-transform active:scale-[0.98] dark:bg-white dark:text-black"
 					onclick={() => (questionIndex += 1)}
 				>
-					Next
+					{$t('chat.next')}
 				</button>
 			{:else if pending}
 				<button
@@ -210,7 +215,7 @@
 					disabled={!canSubmit || submitting}
 					onclick={() => submit()}
 				>
-					Submit answers
+					{$t('chat.submitAnswers')}
 				</button>
 			{/if}
 		</div>

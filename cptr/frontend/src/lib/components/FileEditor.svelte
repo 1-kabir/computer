@@ -1106,19 +1106,19 @@
 						class="toolbar-btn"
 						class:active={markdownMode === 'preview'}
 						onclick={() => switchMarkdownMode('preview')}
-						use:tooltip={'Preview'}><Icon name="eye" size={12} /></button
+						use:tooltip={$t('port.preview')}><Icon name="eye" size={12} /></button
 					>
 					<button
 						class="toolbar-btn"
 						class:active={markdownMode === 'editor'}
 						onclick={() => switchMarkdownMode('editor')}
-						use:tooltip={'Editor'}><Icon name="pencil" size={11} /></button
+						use:tooltip={$t('preview.editor')}><Icon name="pencil" size={11} /></button
 					>
 					<button
 						class="toolbar-btn"
 						class:active={markdownMode === 'raw'}
 						onclick={() => switchMarkdownMode('raw')}
-						use:tooltip={'Source'}><Icon name="code" size={12} /></button
+						use:tooltip={$t('preview.source')}><Icon name="code" size={12} /></button
 					>
 				{:else if (isHtml || isSvg) && !fileData.binary}
 					<button
@@ -1127,7 +1127,7 @@
 						onclick={() => {
 							if (!previewMode) togglePreview();
 						}}
-						use:tooltip={'Preview'}><Icon name="eye" size={12} /></button
+						use:tooltip={$t('port.preview')}><Icon name="eye" size={12} /></button
 					>
 					<button
 						class="toolbar-btn"
@@ -1135,7 +1135,7 @@
 						onclick={() => {
 							if (previewMode) togglePreview();
 						}}
-						use:tooltip={'Edit'}><Icon name="pencil" size={11} /></button
+						use:tooltip={$t('common.edit')}><Icon name="pencil" size={11} /></button
 					>
 				{/if}
 				{#if isJson && !fileData.binary && !jsonParseError}
@@ -1145,7 +1145,7 @@
 						onclick={() => {
 							if (jsonViewMode !== 'tree') toggleJsonView();
 						}}
-						use:tooltip={'Tree view'}><Icon name="list" size={12} /></button
+						use:tooltip={$t('preview.treeView')}><Icon name="list" size={12} /></button
 					>
 					<button
 						class="toolbar-btn"
@@ -1153,7 +1153,7 @@
 						onclick={() => {
 							if (jsonViewMode !== 'source') toggleJsonView();
 						}}
-						use:tooltip={'Source'}><Icon name="code" size={12} /></button
+						use:tooltip={$t('preview.source')}><Icon name="code" size={12} /></button
 					>
 				{/if}
 				{#if isEditing || markdownMode === 'editor' || hasChanges || saving || saved}
@@ -1161,7 +1161,7 @@
 						class="toolbar-btn {saved ? 'saved' : ''}"
 						onclick={saveFile}
 						disabled={saving}
-						use:tooltip={saving ? 'Saving...' : saved ? 'Saved' : 'Save'}
+						use:tooltip={saving ? $t('settings.saving') : saved ? $t('settings.saved') : $t('settings.save')}
 						><Icon name={saved ? 'check' : 'save'} size={11} /></button
 					>
 				{/if}
@@ -1170,12 +1170,12 @@
 						class="toolbar-btn"
 						class:active={diffMode}
 						onclick={toggleDiff}
-						use:tooltip={diffMode ? 'Hide diff' : 'Show diff'}
+						use:tooltip={diffMode ? $t('preview.hideDiff') : $t('preview.showDiff')}
 						><Icon name="git-diff" size={12} /></button
 					>
 				{/if}
 				{#if !isUntitled}
-					<button class="toolbar-btn" onclick={() => loadFile(filePath)} use:tooltip={'Refresh'}
+					<button class="toolbar-btn" onclick={() => loadFile(filePath)} use:tooltip={$t('files.refresh')}
 						><Icon name="refresh" size={11} /></button
 					>
 				{/if}

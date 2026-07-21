@@ -235,8 +235,8 @@
 						<div>
 							<div class="text-gray-600 dark:text-gray-300">{question.question}</div>
 							<div class="text-gray-400 dark:text-gray-500">
-								{answer || 'No answer recorded'}{answer === question.options?.[0]?.label
-									? ' (Recommended)'
+								{answer || $t('chat.noAnswerRecorded')}{answer === question.options?.[0]?.label
+									? ` (${$t('chat.recommended')})`
 									: ''}
 							</div>
 						</div>

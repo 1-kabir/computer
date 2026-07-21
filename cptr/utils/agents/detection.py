@@ -9,8 +9,8 @@ import os
 import re
 import shutil
 import socket
-from dataclasses import dataclass, asdict
 from contextlib import suppress
+from dataclasses import dataclass, asdict
 from typing import Any
 
 import httpx
@@ -59,6 +59,39 @@ def _resolve_command(command: str) -> str | None:
     return shutil.which(command)
 
 
+def _find_claude_desktop_command() -> str | None:
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        root = os.path.join(appdata, "Claude", "claude-code") if appdata else None
+        relative_paths = (("claude.exe",),)
+    else:
+        root = os.path.join(
+            os.path.expanduser("~"),
+            "Library",
+            "Application Support",
+            "Claude",
+            "claude-code",
+        )
+        relative_paths = (
+            ("claude.app", "Contents", "MacOS", "claude"),
+            ("claude",),
+        )
+
+    candidates: list[tuple[tuple[int, int, int], str]] = []
+    if root is not None and os.path.isdir(root):
+        for name in os.listdir(root):
+            version_dir = os.path.join(root, name)
+            version = _parse_version_tuple(name)
+            if version is None or not os.path.isdir(version_dir):
+                continue
+            for relative_path in relative_paths:
+                candidate = os.path.join(version_dir, *relative_path)
+                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                    candidates.append((version, candidate))
+                    break
+    return max(candidates)[1] if candidates else None
+
+
 async def _run_probe(
     argv: list[str],
     timeout: float = 3.0,
@@ -82,7 +115,10 @@ async def _run_probe(
 
 
 async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
-    command = _resolve_command(str(profile.get("command") or ""))
+    raw_command = str(profile.get("command") or "").strip()
+    command = _resolve_command(raw_command)
+    if command is None and profile.get("agent") == "claude_code" and raw_command == "claude":
+        command = _find_claude_desktop_command()
     if command is None:
         return AgentDetection("not_found", None, None, "Command not found")
 
@@ -549,6 +585,12 @@ async def get_agent_status(app_state=None, refresh: bool = False) -> dict[str, A
             and (mode != "auto" or detected.status == "ready")
         )
         effective_profile = dict(profile)
+        if (
+            detected.command
+            and profile.get("agent") == "claude_code"
+            and _resolve_command(str(profile.get("command") or "")) is None
+        ):
+            effective_profile["command"] = detected.command
         effective_profile["models"] = models
         if models and effective_profile.get("default_model") not in models:
             effective_profile["default_model"] = models[0]

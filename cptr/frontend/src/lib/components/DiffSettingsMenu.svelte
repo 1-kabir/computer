@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { diffDisplayMode, hideWhitespaceChanges } from '$lib/stores/gitDiffSettings';
+	import { t } from '$lib/i18n';
 	import DropdownMenu from './DropdownMenu.svelte';
 	import Icon from './Icon.svelte';
 
@@ -36,7 +37,7 @@
 			aria-pressed={$hideWhitespaceChanges}
 		>
 			<Icon name="code" size={13} class="app-icon-muted shrink-0" />
-			<span class="min-w-0 flex-1 truncate">Hide whitespace</span>
+			<span class="min-w-0 flex-1 truncate">{$t('diff.hideWhitespace')}</span>
 			<span
 				class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors duration-150 {$hideWhitespaceChanges
 					? 'bg-gray-900 dark:bg-white'
@@ -51,7 +52,7 @@
 		</button>
 
 		<div class="app-muted px-2 pb-0.5 pt-1 text-[0.625rem] leading-none uppercase">
-			Diff Display
+			{$t('diff.display')}
 		</div>
 
 		<button
@@ -63,7 +64,7 @@
 			onclick={() => diffDisplayMode.set('unified')}
 		>
 			<Icon name="list" size={13} class="app-icon-muted shrink-0" />
-			<span class="min-w-0 flex-1 truncate text-left">Unified</span>
+			<span class="min-w-0 flex-1 truncate text-left">{$t('diff.unified')}</span>
 			{#if $diffDisplayMode === 'unified'}
 				<Icon name="check" size={11} class="app-icon-muted shrink-0" />
 			{/if}
@@ -77,7 +78,7 @@
 			onclick={() => diffDisplayMode.set('split')}
 		>
 			<Icon name="split-view" size={13} class="app-icon-muted shrink-0" />
-			<span class="min-w-0 flex-1 truncate">Split</span>
+			<span class="min-w-0 flex-1 truncate">{$t('diff.split')}</span>
 			{#if $diffDisplayMode === 'split'}
 				<Icon name="check" size={11} class="app-icon-muted shrink-0" />
 			{/if}
