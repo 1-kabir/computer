@@ -43,6 +43,7 @@
 	let wsChatsLoading = $state<Set<string>>(new Set());
 	let currentPath = $derived($currentWorkspace?.path ?? null);
 	let currentChatId = $derived($activeTab?.type === 'chat' ? $activeTab.path : null);
+	const WS_CHATS_PAGE_SIZE = 5;
 
 	function toggleWorkspaceExpand(path: string) {
 		const next = new Set(expandedWorkspaces);
@@ -55,12 +56,18 @@
 		expandedWorkspaces = next;
 	}
 
-	async function fetchWorkspaceChats(path: string, append = false) {
+	async function fetchWorkspaceChats(path: string, append = false, limit = WS_CHATS_PAGE_SIZE) {
 		if (wsChatsLoading.has(path)) return;
 		wsChatsLoading = new Set([...wsChatsLoading, path]);
 		try {
 			const existing = wsChatsCache.get(path) ?? [];
-			const data = await getChats(path, 5, append ? existing.length : 0, 'updated_at', 'desc');
+			const data = await getChats(
+				path,
+				append ? WS_CHATS_PAGE_SIZE : limit,
+				append ? existing.length : 0,
+				'updated_at',
+				'desc'
+			);
 			wsChatsCache = new Map([
 				...wsChatsCache,
 				[
@@ -88,6 +95,11 @@
 			next.delete(path);
 			wsChatsLoading = next;
 		}
+	}
+
+	function reloadWorkspaceChats(path: string) {
+		const loadedCount = wsChatsCache.get(path)?.length ?? WS_CHATS_PAGE_SIZE;
+		void fetchWorkspaceChats(path, false, Math.max(loadedCount, WS_CHATS_PAGE_SIZE));
 	}
 
 	function closeMobileSidebar() {
@@ -254,7 +266,7 @@
 			data.workspace &&
 			expandedWorkspaces.has(data.workspace)
 		) {
-			void fetchWorkspaceChats(data.workspace);
+			reloadWorkspaceChats(data.workspace);
 		}
 	}
 
