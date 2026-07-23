@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.13] - 2026-07-23
+
+### Fixed
+
+- 💬 **Local model chats stop repeating themselves.** When a llama.cpp or OpenAI-compatible connection finishes an answer, Computer now stops there instead of accepting extra repeated parts that could duplicate the final text or run the same tool again.
+
 ## [0.9.12] - 2026-07-21
 
 ### Added

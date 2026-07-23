@@ -554,9 +554,14 @@ async def stream_openai_completions(
                         return item
 
                     async for line in resp.aiter_lines():
-                        if not line.startswith("data: ") or line == "data: [DONE]":
+                        if not line.startswith("data:"):
                             continue
-                        chunk = json.loads(line[6:])
+                        raw = line.removeprefix("data:").strip()
+                        if raw == "[DONE]":
+                            break
+                        if not raw:
+                            continue
+                        chunk = json.loads(raw)
                         choices = chunk.get("choices", [])
                         delta = choices[0].get("delta", {}) if choices else {}
 
