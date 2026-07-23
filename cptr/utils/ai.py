@@ -259,7 +259,10 @@ def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
             # assistant with tool calls → Anthropic tool_use blocks
             blocks: list[dict] = []
             if content:
-                blocks.append({"type": "text", "text": content})
+                if isinstance(content, list):
+                    blocks.extend(block for block in content if block.get("type") == "text")
+                else:
+                    blocks.append({"type": "text", "text": content})
             for tc in m["tool_calls"]:
                 blocks.append(
                     {
@@ -422,7 +425,7 @@ def _to_openai_messages(
 
     Strict default OpenAI-compatible requests do not receive provider-specific
     reasoning fields.  llama.cpp compatibility replays text reasoning as
-    reasoning_content.  Other non-standard fields (fc_id in tool_calls) are
+    reasoning_content. Other non-standard fields (fc_id in tool_calls) are
     stripped.
     """
     result = []
@@ -461,6 +464,7 @@ def _to_openai_messages(
         else:
             out = dict(m)
             out.pop("reasoning_items", None)
+            out["content"] = content
             if out.get("tool_calls"):
                 out["tool_calls"] = [
                     {k: v for k, v in tc.items() if k != "fc_id"} for tc in out["tool_calls"]
@@ -726,6 +730,24 @@ def _to_responses_input(
                 m.get("reasoning_items"), provider_type=provider_type
             ):
                 items.append(ri)
+            content = m.get("content", "")
+            if isinstance(content, list):
+                text = "".join(
+                    block.get("text") or ""
+                    for block in content
+                    if isinstance(block, dict)
+                    and block.get("type") in ("text", "output_text", "input_text")
+                )
+            else:
+                text = content
+            if isinstance(text, str) and text.strip():
+                items.append(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text}],
+                    }
+                )
             for tc in m["tool_calls"]:
                 call_id = tc.get("id", "")
                 # Skip function_calls that have no matching tool result

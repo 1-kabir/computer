@@ -785,6 +785,115 @@ async def generate_chat_title(
 # ── Message history ─────────────────────────────────────────
 
 
+def _output_items_to_messages(output_items: list[dict], message_id: str | None = None) -> list[dict]:
+    """Convert ordered persisted output items into model-visible messages."""
+    native_agent_call_ids = {
+        item["call_id"]
+        for item in output_items
+        if item.get("type") == "function_call"
+        and item.get("call_id")
+        and _is_native_agent_tool_item(item)
+    }
+    output_call_ids = {
+        item["call_id"]
+        for item in output_items
+        if item.get("type") == "function_call_output"
+        and item.get("call_id") not in native_agent_call_ids
+    }
+    messages: list[dict] = []
+    pending_content: list[str] = []
+    pending_reasoning_items: list[dict] = []
+    pending_tool_calls: list[dict] = []
+    call_names: dict[str, str] = {}
+
+    def flush_pending() -> None:
+        nonlocal pending_content, pending_reasoning_items, pending_tool_calls
+        if not pending_content and not pending_reasoning_items and not pending_tool_calls:
+            return
+        assistant_msg: dict = {
+            "role": "assistant",
+            "content": "".join(pending_content),
+        }
+        if message_id:
+            assistant_msg["id"] = message_id
+        if pending_tool_calls:
+            assistant_msg["tool_calls"] = pending_tool_calls
+        if pending_reasoning_items:
+            assistant_msg["reasoning_items"] = pending_reasoning_items
+        messages.append(assistant_msg)
+        pending_content = []
+        pending_reasoning_items = []
+        pending_tool_calls = []
+
+    for item in output_items:
+        itype = item.get("type")
+        if itype == "message":
+            text = "".join(
+                block.get("text") or ""
+                for block in item.get("content") or []
+                if isinstance(block, dict) and block.get("type") in ("text", "output_text")
+            )
+            if text:
+                pending_content.append(text)
+        elif itype == "reasoning":
+            if (
+                item.get("status") not in (None, "completed")
+                or str(item.get("id", "")).startswith("reasoning-")
+                or (
+                    not item.get("encrypted_content")
+                    and not item.get("reasoning_details")
+                    and _reasoning_text_len(item) <= 0
+                )
+            ):
+                continue
+            pending_reasoning_items.append(item)
+        elif itype == "function_call" and item.get("status") == "completed":
+            call_id = item.get("call_id")
+            if not call_id or call_id in native_agent_call_ids:
+                continue
+            if call_id not in output_call_ids:
+                logger.warning(
+                    "[history] Skipping orphaned function_call %s (%s) — no matching output",
+                    call_id,
+                    item.get("name", "?"),
+                )
+                continue
+            arguments = item.get("arguments", {})
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments)
+            tc = {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": item.get("name", ""),
+                    "arguments": arguments,
+                },
+            }
+            if item.get("fc_id"):
+                tc["fc_id"] = item["fc_id"]
+            call_names[call_id] = item.get("name", "")
+            pending_tool_calls.append(tc)
+        elif itype == "function_call_output" and item.get("call_id") not in native_agent_call_ids:
+            call_id = item.get("call_id")
+            if call_id not in call_names:
+                continue
+            flush_pending()
+            tool_msg = {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": _tool_result_for_model(
+                    call_names.get(call_id, ""),
+                    item.get("output", ""),
+                ),
+            }
+            if message_id:
+                tool_msg["id"] = message_id
+            messages.append(tool_msg)
+
+    flush_pending()
+    return messages
+
+
 async def _load_message_history(chat_id: str, message_id: str) -> tuple[list[dict], str | None]:
     """Load the ancestor chain from message_id to root as LLM messages.
 
@@ -880,151 +989,14 @@ async def _load_message_history(chat_id: str, message_id: str) -> tuple[list[dic
                 elif text_content != entry["content"]:
                     entry["content"] = text_content
 
-        # Reconstruct tool calls from output items for the provider.
-        #
-        # Output items accumulate across agentic-loop iterations within a
-        # single assistant message.  The Responses API (reasoning models)
-        # requires that each function_call is paired with the reasoning
-        # items from the *same* API response.  To reconstruct the correct
-        # interleaved history we group output items into "turns":
-        #
-        #   Turn = [reasoning…, function_call…, function_call_output…]
-        #
-        # Each turn produces one assistant message (with tool_calls +
-        # reasoning_items) followed by the corresponding tool-result
-        # messages.
+        # Reconstruct model-visible messages from the ordered output stream.
+        # `m.output` is the source of truth: assistant text/reasoning,
+        # function_call, function_call_output, then possibly more text.
         if m.output:
-            native_agent_call_ids = {
-                item["call_id"]
-                for item in m.output
-                if item.get("type") == "function_call"
-                and item.get("call_id")
-                and _is_native_agent_tool_item(item)
-            }
-            # ── Collect the set of call_ids that have outputs ──
-            # This is needed to filter out orphaned function_calls
-            # (e.g. from crashes, partial persistence, or data corruption).
-            output_call_ids = {
-                item["call_id"]
-                for item in m.output
-                if item.get("type") == "function_call_output"
-                and item.get("call_id") not in native_agent_call_ids
-            }
-
-            # ── Group output items into per-iteration turns ──
-            turns: list[dict] = []  # each: {reasoning: [], calls: [], outputs: []}
-            current_turn: dict = {"reasoning": [], "calls": [], "outputs": []}
-
-            for item in m.output:
-                itype = item.get("type")
-                if itype == "reasoning":
-                    if (
-                        item.get("status") not in (None, "completed")
-                        or str(item.get("id", "")).startswith("reasoning-")
-                        or (
-                            not item.get("encrypted_content")
-                            and not item.get("reasoning_details")
-                            and _reasoning_text_len(item) <= 0
-                        )
-                    ):
-                        continue
-                    # A reasoning item after we already have outputs means
-                    # a new API iteration started — flush the current turn.
-                    if current_turn["outputs"]:
-                        turns.append(current_turn)
-                        current_turn = {"reasoning": [], "calls": [], "outputs": []}
-                    current_turn["reasoning"].append(item)
-                elif itype == "function_call" and item.get("status") == "completed":
-                    if item.get("call_id") in native_agent_call_ids:
-                        continue
-                    # Only include calls that have a matching output
-                    if item["call_id"] not in output_call_ids:
-                        logger.warning(
-                            "[history] Skipping orphaned function_call %s (%s) — no matching output",
-                            item.get("call_id", "?"),
-                            item.get("name", "?"),
-                        )
-                        continue
-                    # A new function_call after outputs means
-                    # a new iteration (model saw results and called again).
-                    if current_turn["outputs"]:
-                        turns.append(current_turn)
-                        current_turn = {"reasoning": [], "calls": [], "outputs": []}
-                    tc = {
-                        "id": item["call_id"],
-                        "type": "function",
-                        "function": {
-                            "name": item["name"],
-                            "arguments": json.dumps(item.get("arguments", {})),
-                        },
-                    }
-                    # Preserve Responses API fc_ ID for round-tripping
-                    if item.get("fc_id"):
-                        tc["fc_id"] = item["fc_id"]
-                    current_turn["calls"].append(tc)
-                elif (
-                    itype == "function_call_output"
-                    and item.get("call_id") not in native_agent_call_ids
-                ):
-                    current_turn["outputs"].append(item)
-                # Skip other types (message, artifact, pending calls, etc.)
-
-            # Don't forget the last turn
-            if current_turn["reasoning"] or current_turn["calls"] or current_turn["outputs"]:
-                turns.append(current_turn)
-
-            if not turns:
-                # No tool calls — keep entry as-is (plain text assistant)
-                pass
-            else:
-                for ti, turn in enumerate(turns):
-                    # Filter calls to only those with matching outputs
-                    turn_output_ids = {o["call_id"] for o in turn["outputs"]}
-                    matched_calls = [tc for tc in turn["calls"] if tc["id"] in turn_output_ids]
-                    call_names = {
-                        tc["id"]: tc.get("function", {}).get("name", "") for tc in turn["calls"]
-                    }
-                    if turn["reasoning"] and not matched_calls and not turn["outputs"]:
-                        if ti == 0:
-                            entry["reasoning_items"] = turn["reasoning"]
-                        else:
-                            result.append(entry)
-                            entry = {
-                                "id": m.id,
-                                "role": "assistant",
-                                "content": "",
-                                "reasoning_items": turn["reasoning"],
-                            }
-                        continue
-                    if matched_calls:
-                        if ti == 0:
-                            # First turn: attach to the existing entry
-                            entry["tool_calls"] = matched_calls
-                            if turn["reasoning"]:
-                                entry["reasoning_items"] = turn["reasoning"]
-                        else:
-                            # Subsequent turns: flush the pending entry (last tool
-                            # result from previous turn) before creating a new one.
-                            result.append(entry)
-                            entry = {
-                                "id": m.id,
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": matched_calls,
-                            }
-                            if turn["reasoning"]:
-                                entry["reasoning_items"] = turn["reasoning"]
-                    for out in turn["outputs"]:
-                        result.append(entry)
-                        entry = {
-                            "id": m.id,
-                            "role": "tool",
-                            "tool_call_id": out["call_id"],
-                            "content": _tool_result_for_model(
-                                call_names.get(out["call_id"], ""),
-                                out.get("output", ""),
-                            ),
-                        }
+            output_messages = _output_items_to_messages(m.output, m.id)
+            if output_messages:
+                result.extend(output_messages)
+                continue
 
         result.append(entry)
 
@@ -1154,151 +1126,6 @@ def _tool_result_for_model(tool_name: str, result: str) -> str:
             "images": image_files,
         }
     )
-
-def _append_tool_to_messages(
-    messages: list[dict],
-    event: dict,
-    result: str,
-    provider: str,
-    reasoning_items: list[dict] | None = None,
-):
-    """Append a tool call + result to the message history for the next API call."""
-    result = _tool_result_for_model(event["name"], result)
-
-    # Check for image result before truncation (data URI is large but needed)
-    image = _parse_image_data_uri(result)
-
-    if not image:
-        # Guard against oversized tool outputs (skip for images, handled above)
-        if len(result) > CHAT_TOOL_MAX_CHARS:
-            half = CHAT_TOOL_MAX_CHARS // 2
-            result = result[:half] + "\n\n...(truncated)...\n\n" + result[-half:]
-
-    # Add assistant message with tool_call
-    assistant_msg = {
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": event["call_id"],
-                "fc_id": event.get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": event["name"],
-                    "arguments": json.dumps(event["arguments"]),
-                },
-            }
-        ],
-    }
-    # Attach reasoning items for round-tripping (Responses API reasoning models)
-    if reasoning_items:
-        assistant_msg["reasoning_items"] = reasoning_items
-    messages.append(assistant_msg)
-
-    if image:
-        # Structured multimodal content — provider converters handle the
-        # "image" block type appropriately for each API.
-        media_type, b64_data = image
-        path = event["arguments"].get("path", "image")
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": event["call_id"],
-                "content": [
-                    {"type": "text", "text": f"Image file: {path}"},
-                    {
-                        "type": "image",
-                        "media_type": media_type,
-                        "base64": b64_data,
-                    },
-                ],
-            }
-        )
-    else:
-        # Plain text tool result
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": event["call_id"],
-                "content": result,
-            }
-        )
-
-
-def _append_batch_to_messages(
-    messages: list[dict],
-    call_results: list[tuple[dict, str]],
-    provider: str,
-    reasoning_items: list[dict] | None = None,
-):
-    """Append multiple tool calls + results as a single assistant message.
-
-    Unlike _append_tool_to_messages (which creates one assistant message per
-    call), this batches all calls into one assistant message.  This is
-    required for the Responses API with reasoning models, where all
-    function_calls from one API response share the same reasoning items.
-    """
-    if not call_results:
-        return
-
-    tool_calls = []
-    for event, _ in call_results:
-        tool_calls.append(
-            {
-                "id": event["call_id"],
-                "fc_id": event.get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": event["name"],
-                    "arguments": json.dumps(event["arguments"]),
-                },
-            }
-        )
-
-    assistant_msg: dict = {
-        "role": "assistant",
-        "content": "",
-        "tool_calls": tool_calls,
-    }
-    if reasoning_items:
-        assistant_msg["reasoning_items"] = reasoning_items
-    messages.append(assistant_msg)
-
-    for event, result in call_results:
-        result = _tool_result_for_model(event["name"], result)
-
-        # Guard against oversized tool outputs
-        image = _parse_image_data_uri(result)
-        if not image:
-            if len(result) > CHAT_TOOL_MAX_CHARS:
-                half = CHAT_TOOL_MAX_CHARS // 2
-                result = result[:half] + "\n\n...(truncated)...\n\n" + result[-half:]
-
-        if image:
-            media_type, b64_data = image
-            path = event["arguments"].get("path", "image")
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": event["call_id"],
-                    "content": [
-                        {"type": "text", "text": f"Image file: {path}"},
-                        {
-                            "type": "image",
-                            "media_type": media_type,
-                            "base64": b64_data,
-                        },
-                    ],
-                }
-            )
-        else:
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": event["call_id"],
-                    "content": result,
-                }
-            )
 
 
 def _scrub_incomplete_items(output_items: list[dict]) -> None:
@@ -1951,6 +1778,7 @@ async def run_chat_task(
         provider = connection["provider"]
         api_key = decrypt_key(connection.get("api_key", ""), _get_jwt_secret())
         base_url = connection.get("base_url") or _default_base_url(provider)
+        api_type = connection.get("api_type", "chat_completions")
 
         chat_obj = await Chat.get_by_id(chat_id)
         chat_params = (chat_obj.meta or {}).get("params", {}) if chat_obj else {}
@@ -1960,6 +1788,11 @@ async def run_chat_task(
         except Exception:
             chat_models_config = {}
         builtin_tools = resolve_builtin_tools_config(chat_models_config, model, configured_model)
+        provider_type = (
+            "llama.cpp"
+            if provider == "openai" and connection.get("provider_type") == "llama.cpp"
+            else "default"
+        )
         messages, loaded_summary = await _load_message_history(chat_id, message_id)
         skill_settings = await get_skill_settings()
         skill_authoring_allowed = _has_prior_real_chat_content(messages, loaded_summary)
@@ -2101,7 +1934,6 @@ async def run_chat_task(
                 drop_zone = messages[:split_idx]
                 keep_zone = messages[split_idx:]
 
-                api_type = connection.get("api_type", "chat_completions")
                 summary = await summarize_messages(
                     drop_zone,
                     loaded_summary,
@@ -2158,8 +1990,8 @@ async def run_chat_task(
             api_messages = messages
             if provider != "anthropic":
                 image_blocks = []
-                api_messages = []
-                for m in messages:
+                normalized_messages = []
+                for m in api_messages:
                     if m.get("role") == "tool" and isinstance(m.get("content"), list):
                         text_parts = []
                         for part in m["content"]:
@@ -2167,9 +1999,10 @@ async def run_chat_task(
                                 text_parts.append(part.get("text", ""))
                             elif part.get("type") == "image":
                                 image_blocks.append(part)
-                        api_messages.append({**m, "content": "\n".join(text_parts)})
+                        normalized_messages.append({**m, "content": "\n".join(text_parts)})
                     else:
-                        api_messages.append(m)
+                        normalized_messages.append(m)
+                api_messages = normalized_messages
                 if image_blocks:
                     api_messages.append(
                         {
@@ -2191,17 +2024,11 @@ async def run_chat_task(
                 instructions=system,
                 tools=tools,
             )
-            provider_type = (
-                "llama.cpp"
-                if provider == "openai" and connection.get("provider_type") == "llama.cpp"
-                else "default"
-            )
-
             if provider == "anthropic":
                 stream = stream_anthropic(
                     form_data, base_url, api_key, request_params=request_params
                 )
-            elif connection.get("api_type") == "responses":
+            elif api_type == "responses":
                 stream = stream_openai_responses(
                     form_data,
                     base_url,
@@ -2243,7 +2070,9 @@ async def run_chat_task(
                     text_buffer += event["content"]
                     await emit(delta=event["content"])
                     if provider_type == "llama.cpp" and usage_context_tokens(last_usage) <= 0:
-                        estimated_context_tokens = estimated_prompt_tokens + estimate_tokens(content)
+                        estimated_context_tokens = estimated_prompt_tokens + estimate_tokens(
+                            content
+                        )
                         if estimated_context_tokens - last_emitted_context_tokens >= 256:
                             last_emitted_context_tokens = estimated_context_tokens
                             await emit(
@@ -2404,13 +2233,16 @@ async def run_chat_task(
                         await emit(output=item)
                         await emit(output=result_item)
                         _sync_state()
-                        _append_batch_to_messages(
-                            messages,
-                            [(tc, error)],
-                            provider,
-                            reasoning_items=response_reasoning_items,
+                        new_messages = _output_items_to_messages(
+                            [
+                                *response_reasoning_items,
+                                *([flushed_item] if flushed_item else []),
+                                item,
+                                result_item,
+                            ]
                         )
-                        new_messages_since += 2
+                        messages.extend(new_messages)
+                        new_messages_since += len(new_messages)
                         await _save_message(
                             "invalid ask_user", content=content, output=output_items
                         )
@@ -2536,7 +2368,7 @@ async def run_chat_task(
 
                 # Execute non-delegate tools sequentially first
                 # Collect results for batch message construction
-                sequential_results: list[tuple[dict, str]] = []  # (event, result)
+                sequential_result_items: list[dict] = []
                 for idx in other_indices:
                     tc, item = call_items[idx]
                     if tc["name"] == "create_artifact":
@@ -2564,6 +2396,7 @@ async def run_chat_task(
                     await emit(output=item)
                     await emit(output=result_item)
                     _sync_state()
+                    sequential_result_items.append(result_item)
 
                     artifact_item = build_artifact_item(tc["name"], tc["arguments"], result)
                     if artifact_item:
@@ -2580,21 +2413,8 @@ async def run_chat_task(
                             output_items.append(file_item)
                             await emit(output=file_item)
                             _sync_state()
-
-                    sequential_results.append((tc, result))
-
-                # Build a single combined assistant message for all sequential calls
-                # with their shared reasoning items (required for reasoning model round-tripping)
-                if sequential_results:
-                    _append_batch_to_messages(
-                        messages,
-                        sequential_results,
-                        provider,
-                        reasoning_items=response_reasoning_items,
-                    )
-                    new_messages_since += 1 + len(sequential_results)
-
                 # Execute delegate_task calls concurrently, emit each as it completes
+                delegate_result_items: list[dict] = []
                 if delegate_indices:
                     # Create tasks, mapping task → index
                     inflight: dict[asyncio.Task, int] = {}
@@ -2608,8 +2428,6 @@ async def run_chat_task(
                             )
                         )
                         inflight[task] = idx
-
-                    delegate_results: list[tuple[dict, str]] = []
                     while inflight:
                         done_set, _ = await asyncio.wait(
                             inflight.keys(), return_when=asyncio.FIRST_COMPLETED
@@ -2634,19 +2452,19 @@ async def run_chat_task(
                             await emit(output=item)
                             await emit(output=result_item)
                             _sync_state()
-                            delegate_results.append((tc, result))
+                            delegate_result_items.append(result_item)
 
-                    # Build combined message for all delegate calls
-                    if delegate_results:
-                        # Only attach reasoning if sequential calls didn't consume it
-                        ri = response_reasoning_items if not other_indices else None
-                        _append_batch_to_messages(
-                            messages,
-                            delegate_results,
-                            provider,
-                            reasoning_items=ri,
-                        )
-                        new_messages_since += 1 + len(delegate_results)
+                new_messages = _output_items_to_messages(
+                    [
+                        *response_reasoning_items,
+                        *([flushed_item] if flushed_item else []),
+                        *(item for _, item in call_items if item.get("status") == "completed"),
+                        *sequential_result_items,
+                        *delegate_result_items,
+                    ]
+                )
+                messages.extend(new_messages)
+                new_messages_since += len(new_messages)
 
                 # Persist after all tool calls
                 await _save_message("tool calls complete", content=content, output=output_items)
