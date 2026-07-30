@@ -23,7 +23,7 @@ export async function fetchJSON<T = unknown>(path: string, init?: RequestInit): 
 	const res = await fetchHandler(path, init);
 	if (!res.ok) {
 		const data = await res.json().catch(() => ({}));
-		throw new ApiError(res.status, data.detail || data.error || res.statusText);
+		throw new ApiError(res.status, data.detail || data.error || data.message || res.statusText);
 	}
 	return res.json();
 }
