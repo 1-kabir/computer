@@ -23,7 +23,7 @@ from cptr.utils.agents.models import (
 )
 
 DETECTION_TTL_SECONDS = 30
-CLAUDE_MODELS = [
+CLAUDE_MODEL_FALLBACKS = [
     "claude-fable-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -290,7 +290,7 @@ def _version_at_least(version: tuple[int, int, int] | None, minimum: tuple[int, 
 def _claude_models_for_version(version: str | None) -> list[str]:
     parsed = _parse_version_tuple(version)
     models = []
-    for model in CLAUDE_MODELS:
+    for model in CLAUDE_MODEL_FALLBACKS:
         if model == "claude-fable-5" and not _version_at_least(parsed, MIN_CLAUDE_FABLE_5):
             continue
         if model == "claude-opus-4-8" and not _version_at_least(parsed, MIN_CLAUDE_OPUS_4_8):
@@ -611,12 +611,8 @@ async def get_agent_status(app_state=None, refresh: bool = False) -> dict[str, A
         if implicit_defaults and detected.status in {"not_found", "error"}:
             continue
         mode = profile.get("mode", "auto")
-        models = detected.models or profile.get("models") or []
-        available = (
-            mode != "disabled"
-            and bool(models)
-            and (mode != "auto" or detected.status == "ready")
-        )
+        models = list(dict.fromkeys([*(detected.models or []), *(profile.get("models") or [])]))
+        available = mode != "disabled" and (mode != "auto" or detected.status == "ready")
         effective_profile = dict(profile)
         resolved_profile_command = _resolve_command(str(profile.get("command") or ""))
         if (
