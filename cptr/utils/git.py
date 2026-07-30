@@ -20,6 +20,8 @@ async def _run(
     """Run a git command and return (returncode, stdout, stderr)."""
     proc = await asyncio.create_subprocess_exec(
         "git",
+        "-c",
+        "core.quotePath=false",
         *args,
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
