@@ -142,7 +142,7 @@ class ChatCompletionMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[dict]
-    stream: bool = True
+    stream: bool = False
     # Other OpenAI params are accepted but ignored
     temperature: float | None = None
     max_tokens: int | None = None
