@@ -106,6 +106,27 @@ export function unregisterStreamingChat(chatId: string, tabId: string) {
 	if (tabIds.size === 0) chatToTabs.delete(chatId);
 }
 
+type ToolApprovalShortcutHandler = (approved: boolean) => boolean;
+
+let toolApprovalShortcutHandler: ToolApprovalShortcutHandler | null = null;
+
+export function registerToolApprovalShortcutHandler(
+	handler: ToolApprovalShortcutHandler
+): () => void {
+	toolApprovalShortcutHandler = handler;
+	return () => {
+		if (toolApprovalShortcutHandler === handler) toolApprovalShortcutHandler = null;
+	};
+}
+
+export function approveActiveToolCallShortcut(): boolean {
+	return toolApprovalShortcutHandler?.(true) ?? false;
+}
+
+export function rejectActiveToolCallShortcut(): boolean {
+	return toolApprovalShortcutHandler?.(false) ?? false;
+}
+
 /**
  * Bind a global socket listener that clears streamingChatTabs when a
  * chat's "done" event arrives -- even if the ChatPanel is not mounted.

@@ -21,9 +21,13 @@
 		nextTab: $t('keyboard.nextTab'),
 		prevTab: $t('keyboard.prevTab'),
 		quickOpen: $t('keyboard.quickOpen'),
+		searchAll: $t('keyboard.searchAll'),
 		openSettings: $t('keyboard.openSettings'),
 		toggleSplit: $t('keyboard.toggleSplit'),
-		toggleSidebar: $t('keyboard.toggleSidebar')
+		toggleSidebar: $t('keyboard.toggleSidebar'),
+		approveToolCall: $t('keyboard.approveToolCall'),
+		rejectToolCall: $t('keyboard.rejectToolCall'),
+		voiceMemo: $t('keyboard.voiceMemo')
 	});
 
 	/** Translated action labels for display. */
@@ -40,6 +44,8 @@
 		openSettings: $t('keyboard.action.openSettings'),
 		toggleSplit: $t('keyboard.action.toggleSplit'),
 		toggleSidebar: $t('keyboard.action.toggleSidebar'),
+		approveToolCall: $t('keyboard.action.approveToolCall'),
+		rejectToolCall: $t('keyboard.action.rejectToolCall'),
 		voiceMemo: $t('keyboard.action.voiceMemo')
 	});
 

@@ -42,7 +42,12 @@
 	import { fetchJSON } from '$lib/apis';
 	import { gitStatusStore } from '$lib/stores/gitStatus.svelte';
 	import { t } from '$lib/i18n';
-	import { refreshChatState, bindGlobalChatListener } from '$lib/stores/chat';
+	import {
+		refreshChatState,
+		bindGlobalChatListener,
+		approveActiveToolCallShortcut,
+		rejectActiveToolCallShortcut
+	} from '$lib/stores/chat';
 	import { refreshAudioState } from '$lib/stores/audio';
 	import SetupWizard from '$lib/components/SetupWizard.svelte';
 
@@ -331,8 +336,7 @@
 	function handleKeydown(e: KeyboardEvent) {
 		const action = matchKeybinding(e);
 		if (!action) return;
-		e.preventDefault();
-		executeAction(action, {
+		const handled = executeAction(action, {
 			toggleQuickOpen: () => {
 				showSearch.update((v) => !v);
 			},
@@ -348,8 +352,11 @@
 						if (get(voiceMemosEnabled)) showVoiceMemo.update((v) => !v);
 					});
 				});
-			}
+			},
+			approveToolCall: approveActiveToolCallShortcut,
+			rejectToolCall: rejectActiveToolCallShortcut
 		});
+		if (handled) e.preventDefault();
 	}
 
 	// Chat events belong to the authenticated user, not a workspace.

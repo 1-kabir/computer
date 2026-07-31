@@ -41,6 +41,8 @@ export const ACTION_IDS = [
 	'openSettings',
 	'toggleSplit',
 	'toggleSidebar',
+	'approveToolCall',
+	'rejectToolCall',
 	'voiceMemo'
 ] as const;
 
@@ -61,6 +63,8 @@ export const ACTION_LABELS: Record<ActionId, string> = {
 	openSettings: 'Open Settings',
 	toggleSplit: 'Toggle Split',
 	toggleSidebar: 'Toggle Sidebar',
+	approveToolCall: 'Approve Tool Call',
+	rejectToolCall: 'Reject Tool Call',
 	voiceMemo: 'Voice Memo'
 };
 
@@ -79,6 +83,8 @@ export const DEFAULT_KEYBINDINGS: Record<ActionId, string> = {
 	openSettings: 'Cmd+.',
 	toggleSplit: 'Cmd+\\',
 	toggleSidebar: 'Cmd+Shift+S',
+	approveToolCall: 'Cmd+Shift+Enter',
+	rejectToolCall: 'Cmd+Shift+Backspace',
 	voiceMemo: 'Cmd+Shift+M'
 };
 
@@ -243,6 +249,8 @@ export function executeAction(
 		toggleSettings?: () => void;
 		toggleSearch?: () => void;
 		toggleVoiceMemo?: () => void;
+		approveToolCall?: () => boolean;
+		rejectToolCall?: () => boolean;
 	}
 ): boolean {
 	const dispatchHomeAction = (
@@ -340,6 +348,14 @@ export function executeAction(
 		case 'toggleSidebar':
 			sidebarOpen.update((v) => !v);
 			return true;
+
+		case 'approveToolCall': {
+			return callbacks?.approveToolCall?.() ?? false;
+		}
+
+		case 'rejectToolCall': {
+			return callbacks?.rejectToolCall?.() ?? false;
+		}
 
 		case 'voiceMemo':
 			callbacks?.toggleVoiceMemo?.();

@@ -30,7 +30,8 @@
 		streamingChatTabs,
 		registerStreamingChat,
 		unregisterStreamingChat,
-		updateChatStatuses
+		updateChatStatuses,
+		registerToolApprovalShortcutHandler
 	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { onMount, onDestroy, tick } from 'svelte';
@@ -763,7 +764,7 @@
 		}
 		refreshCommandSessions();
 		commandSessionsTimer = setInterval(refreshCommandSessions, 5000);
-		window.addEventListener('cptr:inspect-command-session', handleInspectCommandSession);
+		window.addEventListener('computer:inspectCommandSession', handleInspectCommandSession);
 
 		const offChat = socketStore.on('events:chat', handleSocketEvent);
 		const offConnect = socketStore.on('connect', handleReconnect);
@@ -779,7 +780,7 @@
 		unbindSocketListeners = null;
 		if (commandSessionsTimer) clearInterval(commandSessionsTimer);
 		commandSessionsTimer = null;
-		window.removeEventListener('cptr:inspect-command-session', handleInspectCommandSession);
+		window.removeEventListener('computer:inspectCommandSession', handleInspectCommandSession);
 		if (landingRefreshTimer) clearTimeout(landingRefreshTimer);
 		if (taskClearTimer) clearTimeout(taskClearTimer);
 		// Don't clear streamingChatTabs here -- the global listener in
@@ -819,6 +820,11 @@
 		if (!chatId || !tabId) return;
 		registerStreamingChat(chatId, tabId);
 		return () => unregisterStreamingChat(chatId!, tabId!);
+	});
+
+	$effect(() => {
+		if (!active) return;
+		return registerToolApprovalShortcutHandler(handleApproveToolCallShortcut);
 	});
 
 	// ── Persist read state separately from visibility tracking ──
@@ -1265,7 +1271,8 @@
 					item.type === 'function_call' && item.call_id === callId && item.status === 'pending'
 			);
 			if (call) {
-				call.status = approved ? 'running' : 'rejected';
+				call.status = approved ? 'queued' : 'rejected';
+				if (approved) call.approved = true;
 				allMessages = [...allMessages]; // trigger reactivity
 			}
 		}
@@ -1275,6 +1282,22 @@
 			// Revert on failure: reload from DB to get true state
 			loadChat(chatId!);
 		});
+	}
+
+	function handleApproveToolCallShortcut(approved: boolean) {
+		for (const { msg } of [...activePath].reverse()) {
+			const item = msg.output?.find(
+				(output: any) =>
+					output.type === 'function_call' &&
+					output.name !== 'ask_user' &&
+					output.status === 'pending'
+			);
+			if (!item) continue;
+
+			handleApprove(msg.id, item.call_id, approved);
+			return true;
+		}
+		return false;
 	}
 
 	function handleAskUserAnswer(
