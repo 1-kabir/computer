@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.18] - 2026-07-31
+
+### Added
+
+- ⌨️ **Approve or reject tool requests from the keyboard.** Tool approval shortcuts are now available in Keyboard settings, so you can keep a chat moving without reaching for the mouse.
+
+### Fixed
+
+- 🧰 **Tool requests continue more smoothly.** When a chat asks for permission to use tools, Computer now keeps the request in order, picks up where it left off after your choice, and handles rejected tools more cleanly.
+- 💬 **Chat shortcuts stay out of the way.** Shortcuts that only apply to an active tool request now leave the rest of the app alone when there is nothing to approve or reject.
+- 💬 **Open WebUI chat titles are more reliable.** New chats started through Open WebUI now get cleaner titles from the first message.
+
 ## [0.9.17] - 2026-07-31
 
 ### Changed

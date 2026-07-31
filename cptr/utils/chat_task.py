@@ -785,7 +785,9 @@ async def generate_chat_title(
 # ── Message history ─────────────────────────────────────────
 
 
-def _output_items_to_messages(output_items: list[dict], message_id: str | None = None) -> list[dict]:
+def _output_items_to_messages(
+    output_items: list[dict], message_id: str | None = None
+) -> list[dict]:
     """Convert ordered persisted output items into model-visible messages."""
     native_agent_call_ids = {
         item["call_id"]
@@ -847,7 +849,7 @@ def _output_items_to_messages(output_items: list[dict], message_id: str | None =
             ):
                 continue
             pending_reasoning_items.append(item)
-        elif itype == "function_call" and item.get("status") == "completed":
+        elif itype == "function_call" and item.get("status") in {"completed", "rejected"}:
             call_id = item.get("call_id")
             if not call_id or call_id in native_agent_call_ids:
                 continue
@@ -1140,6 +1142,7 @@ def _scrub_incomplete_items(output_items: list[dict]) -> None:
         if item.get("type") == "function_call" and item.get("status") in (
             "in_progress",
             "pending",
+            "queued",
         ):
             item["status"] = "failed"
 
@@ -1897,6 +1900,122 @@ async def run_chat_task(
         if "tool_approval_mode" not in chat_params and "auto_approve_tools" in chat_params:
             approval_mode = "full" if chat_params["auto_approve_tools"] else "auto"
 
+        async def run_queued_tool_calls(tool_ctx: dict) -> str:
+            """Run queued tool calls until approval is needed or the queue is empty.
+
+            Returns: "idle", "completed", or "approval_required".
+            """
+            processed_any = False
+            for item in output_items:
+                if item.get("type") != "function_call":
+                    continue
+                if item.get("name") == ASK_USER_NAME or _is_native_agent_tool_item(item):
+                    continue
+                if item.get("status") in {"completed", "rejected", "failed"}:
+                    continue
+                call_id = item.get("call_id")
+                if call_id and any(
+                    result.get("type") == "function_call_output"
+                    and result.get("call_id") == call_id
+                    for result in output_items
+                ):
+                    item["status"] = "completed"
+                    continue
+
+                name = item.get("name", "")
+                tool = ALL_TOOLS.get(name)
+                needs_approval = not (
+                    approval_mode == "full" or (approval_mode == "auto" and tool and tool["auto"])
+                )
+                if needs_approval and not item.get("approved"):
+                    item["status"] = "pending"
+                    await _save_message(
+                        "pending approval",
+                        content=content,
+                        output=output_items,
+                        done=False,
+                    )
+                    await emit(output=item)
+                    _task_state.pop(message_id, None)
+                    await emit(
+                        done=True,
+                        status="approval_required",
+                        title=chat_obj.title if chat_obj else None,
+                        tool_name=name,
+                        workspace=workspace,
+                        workspace_name=workspace.rstrip("/").rsplit("/", 1)[-1]
+                        if workspace
+                        else "",
+                    )
+                    return "approval_required"
+
+                item["status"] = "in_progress"
+                await emit(output=item)
+                _sync_state()
+                await _save_message("tool call in progress", content=content, output=output_items)
+
+                arguments = item.get("arguments") or {}
+                if name == "create_artifact":
+                    args = dict(arguments)
+                    args.pop("workspace", None)
+                    result = await create_artifact(**args, workspace=workspace)
+                else:
+                    result = await execute_tool(
+                        name,
+                        arguments,
+                        {**tool_ctx, "call_id": item["call_id"]},
+                    )
+
+                result_item = {
+                    "type": "function_call_output",
+                    "call_id": item["call_id"],
+                    "output": result,
+                }
+                output_items.append(result_item)
+                item["status"] = "completed"
+                await emit(output=item)
+                await emit(output=result_item)
+                _sync_state()
+
+                artifact_item = build_artifact_item(name, arguments, result)
+                if artifact_item:
+                    output_items.append(artifact_item)
+                    await emit(output=artifact_item)
+                    _sync_state()
+
+                if name == "display_file":
+                    try:
+                        file_item = json.loads(result)
+                    except (json.JSONDecodeError, TypeError):
+                        file_item = None
+                    if isinstance(file_item, dict) and file_item.get("type") == "file":
+                        output_items.append(file_item)
+                        await emit(output=file_item)
+                        _sync_state()
+
+                await _save_message("tool call complete", content=content, output=output_items)
+                processed_any = True
+
+            return "completed" if processed_any else "idle"
+
+        tool_ctx = {
+            "workspace": workspace,
+            "user_id": user_id,
+            "model_id": model,
+            "full_model_id": ((chat_obj.meta or {}).get("last_model") if chat_obj else None)
+            or model,
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "connection": connection,
+            "builtin_tools": builtin_tools,
+        }
+
+        resumed_calls = await run_queued_tool_calls(tool_ctx)
+        if resumed_calls == "approval_required":
+            return
+        if resumed_calls == "completed":
+            messages, loaded_summary = await _load_message_history(chat_id, message_id)
+
         last_usage: dict | None = None  # real usage from last API call
         new_messages_since: int = 0  # messages appended since last API call
 
@@ -2186,18 +2305,6 @@ async def run_chat_task(
                     )
                 flushed_item = _flush_text()
 
-                tool_ctx = {
-                    "workspace": workspace,
-                    "user_id": user_id,
-                    "model_id": model,
-                    "full_model_id": ((chat_obj.meta or {}).get("last_model") if chat_obj else None)
-                    or model,
-                    "chat_id": chat_id,
-                    "message_id": message_id,
-                    "connection": connection,
-                    "builtin_tools": builtin_tools,
-                }
-
                 ask_user_calls = [tc for tc in pending_calls if tc["name"] == ASK_USER_NAME]
                 if ask_user_calls:
                     tc = ask_user_calls[0]
@@ -2319,39 +2426,40 @@ async def run_chat_task(
                         break
 
                 if needs_approval:
-                    # First non-auto tool stops the loop for approval
-                    tc = needs_approval
-                    item = {
-                        "type": "function_call",
-                        "id": str(uuid.uuid4()),
-                        "call_id": tc["call_id"],
-                        "fc_id": tc.get("id", ""),
-                        "name": tc["name"],
-                        "arguments": tc["arguments"],
-                        "status": "pending",
-                    }
-                    output_items.append(item)
+                    call_items = []
+                    for tc in pending_calls:
+                        item = {
+                            "type": "function_call",
+                            "id": str(uuid.uuid4()),
+                            "call_id": tc["call_id"],
+                            "fc_id": tc.get("id", ""),
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                            "status": "queued",
+                        }
+                        output_items.append(item)
+                        call_items.append(item)
+
                     await _save_message(
-                        "pending approval",
+                        "queued tool calls",
                         content=content,
                         output=output_items,
                         done=False,
                     )
                     if flushed_item:
                         await emit(output=flushed_item)
+                    for item in call_items:
                         await emit(output=item)
-                    _task_state.pop(message_id, None)
-                    await emit(
-                        done=True,
-                        status="approval_required",
-                        title=chat_obj.title if chat_obj else None,
-                        tool_name=tc["name"],
-                        workspace=workspace,
-                        workspace_name=workspace.rstrip("/").rsplit("/", 1)[-1]
-                        if workspace
-                        else "",
-                    )
-                    return
+
+                    queue_result = await run_queued_tool_calls(tool_ctx)
+                    if queue_result == "approval_required":
+                        return
+                    if queue_result == "completed":
+                        messages, loaded_summary = await _load_message_history(chat_id, message_id)
+                        new_messages_since = 0
+                        restart = True
+                        continue
+                    raise RuntimeError("tool-call queue did not make progress")
 
                 # All calls are auto-approved — build UI items
                 call_items: list[tuple[dict, dict]] = []  # (event, ui_item)

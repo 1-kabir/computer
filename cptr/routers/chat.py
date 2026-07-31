@@ -491,9 +491,7 @@ async def _get_chat_context_usage(chat, model_id: str | None = None) -> dict | N
                 tokens += estimate_messages_tokens(
                     [{"role": m.role, "content": m.content or ""} for m in trailing_messages]
                 )
-            return build_context_usage(
-                tokens, threshold=compact_token_threshold
-            )
+            return build_context_usage(tokens, threshold=compact_token_threshold)
 
     return estimate_context_usage(messages, system, threshold=compact_token_threshold)
 
@@ -1069,84 +1067,45 @@ async def approve_tool(chat_id: str, message_id: str, body: ApproveRequest, requ
     if not call:
         raise HTTPException(400, "no pending tool call with that call_id")
 
+    model_id = msg.model or ""
+    workspace = chat.meta.get("workspace", "") if chat.meta else ""
+    from cptr.socket.main import emit_to_user
+
     if body.approved:
-        # Execute the tool
-        from cptr.utils.tools import execute_tool
-
-        model_id = msg.model or ""
-        result = await execute_tool(
-            call["name"],
-            call.get("arguments", {}),
-            {
-                "workspace": chat.meta.get("workspace", ""),
-                "user_id": user_id,
-                "model_id": model_id,
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "call_id": body.call_id,
-            },
-        )
-        call["status"] = "completed"
-        output.append(
-            {
-                "type": "function_call_output",
-                "call_id": body.call_id,
-                "output": result,
-            }
-        )
-
-        # Emit artifact card if the tool produced an artifact
-        from cptr.utils.chat_task import build_artifact_item
-
-        artifact_item = build_artifact_item(call["name"], call.get("arguments", {}), result)
-        if artifact_item:
-            output.append(artifact_item)
-            from cptr.socket.main import emit_to_user
-
-            await emit_to_user(
-                user_id,
-                {"chat_id": chat_id, "message_id": message_id, "output": artifact_item},
-            )
-
-        if call["name"] == "display_file":
-            try:
-                file_item = json.loads(result)
-            except (json.JSONDecodeError, TypeError):
-                file_item = None
-            if isinstance(file_item, dict) and file_item.get("type") == "file":
-                output.append(file_item)
-                from cptr.socket.main import emit_to_user
-
-                await emit_to_user(
-                    user_id,
-                    {"chat_id": chat_id, "message_id": message_id, "output": file_item},
-                )
-
+        call["approved"] = True
+        call["status"] = "queued"
         await ChatMessage.update(message_id, output=output, done=False)
 
-        # Resolve model target and continue
-        from cptr.utils.model_targets import resolve_model_target
-
-        target = await resolve_model_target(model_id, request.app.state)
-        workspace = chat.meta.get("workspace", "") if chat.meta else ""
-
-        from cptr.utils.chat_task import start_task
-
-        start_task(
-            message_id=message_id,
-            chat_id=chat_id,
-            user_id=user_id,
-            workspace=workspace,
-            target=target,
-        )
+        await emit_to_user(user_id, {"chat_id": chat_id, "message_id": message_id, "output": call})
     else:
         call["status"] = "rejected"
-        await ChatMessage.update(message_id, output=output, done=True)
-        # Process pending inputs since this chat is now idle.
-        from cptr.utils.chat_task import process_pending_chat_inputs
+        result_item = {
+            "type": "function_call_output",
+            "call_id": body.call_id,
+            "output": "Error: tool call rejected by user.",
+        }
+        output.append(result_item)
+        await ChatMessage.update(message_id, output=output, done=False)
+        await emit_to_user(user_id, {"chat_id": chat_id, "message_id": message_id, "output": call})
+        await emit_to_user(
+            user_id,
+            {"chat_id": chat_id, "message_id": message_id, "output": result_item},
+        )
 
-        workspace = chat.meta.get("workspace", "") if chat.meta else ""
-        await process_pending_chat_inputs(chat_id, user_id, workspace)
+    # Resolve model target and continue the saved tool-call queue.
+    from cptr.utils.model_targets import resolve_model_target
+
+    target = await resolve_model_target(model_id, request.app.state)
+
+    from cptr.utils.chat_task import start_task
+
+    start_task(
+        message_id=message_id,
+        chat_id=chat_id,
+        user_id=user_id,
+        workspace=workspace,
+        target=target,
+    )
 
     return {"ok": True}
 
