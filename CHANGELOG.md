@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.17] - 2026-07-31
+
+### Changed
+
+- 🤖 **Agent chats remember more when they start.** Codex and Claude Code now get helpful recent context at the beginning of a session, so follow-up requests are less likely to feel disconnected.
+- 💬 **Open WebUI conversations carry over more naturally.** When a chat starts through Open WebUI, Computer now brings along earlier messages before answering the latest one.
+
+### Fixed
+
+- 🔔 **Task notifications are clearer when Computer needs you.** Notifications now say when a task is waiting for approval or an answer, with wording in every supported language.
+
 ## [0.9.16] - 2026-07-31
 
 ### Added
