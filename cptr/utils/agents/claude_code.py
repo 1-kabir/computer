@@ -17,7 +17,7 @@ from cptr.utils.agents.events import (
     AgentTextDelta,
     AgentToolUpdate,
 )
-from cptr.utils.agents.prompts import latest_user_text
+from cptr.utils.agents.prompts import session_turn_prompt_text
 
 
 _claude_clients: dict[str, tuple[Any, tuple[Any, ...]]] = {}
@@ -125,7 +125,6 @@ async def run_claude_code_agent(
         yield AgentError("Claude Code support requires the claude-agent-sdk Python package")
         return
 
-    prompt = latest_user_text(messages)
     env = os.environ.copy()
     home = os.path.expanduser(str(profile["home"])) if profile.get("home") else None
     if home:
@@ -143,6 +142,7 @@ async def run_claude_code_agent(
         if resume_state:
             value = resume_state.get("session_id")
             session_id = value if isinstance(value, str) and value else None
+        prompt = session_turn_prompt_text(messages, resumed=bool(session_id))
 
         options_kwargs: dict[str, Any] = {
             "system_prompt": system_prompt or None,

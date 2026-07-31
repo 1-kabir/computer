@@ -21,7 +21,7 @@ from cptr.utils.agents.events import (
     AgentToolOutputDelta,
     AgentToolUpdate,
 )
-from cptr.utils.agents.prompts import latest_user_text
+from cptr.utils.agents.prompts import session_turn_prompt_text
 
 CODEX_STDOUT_CHUNK_SIZE = 64 * 1024
 CODEX_MAX_WIRE_MESSAGE_CHARS = 16 * 1024 * 1024
@@ -375,7 +375,7 @@ async def run_codex_agent(
             yield AgentError("Codex did not return a thread id")
             return
 
-        prompt = latest_user_text(messages)
+        prompt = session_turn_prompt_text(messages, resumed=bool(_resume_thread_id(resume_state)))
         turn_input: list[dict[str, Any]] = []
         if prompt:
             turn_input.append({"type": "text", "text": prompt})
