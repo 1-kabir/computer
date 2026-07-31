@@ -27,6 +27,7 @@
 	let available = $state<Record<string, boolean>>({});
 	let saved = $state<Record<string, boolean>>({});
 	let modal = $state<ModalState | null>(null);
+	let deletedProfile = $state(false);
 
 	const statusLabelKey: Record<string, string> = {
 		ready: 'admin.agentsStatusReady',
@@ -62,6 +63,7 @@
 		detected = Object.fromEntries(data.profiles.map((entry) => [entry.id, entry.detected]));
 		available = Object.fromEntries(data.profiles.map((entry) => [entry.id, entry.available]));
 		saved = Object.fromEntries(data.profiles.map((entry) => [entry.id, !entry.implicit]));
+		deletedProfile = false;
 	}
 
 	function newProfile(agent: AgentProfile['agent'] = 'codex'): AgentProfile {
@@ -176,6 +178,7 @@
 		if (profile) {
 			const { [profile.id]: _removed, ...rest } = saved;
 			saved = rest;
+			deletedProfile = true;
 		}
 		modal = null;
 	}
@@ -189,8 +192,10 @@
 	}
 
 	async function save() {
-		const savedProfiles = profiles.filter((profile) => saved[profile.id]);
-		if (savedProfiles.length === 0) {
+		const savedProfiles = deletedProfile
+			? profiles
+			: profiles.filter((profile) => saved[profile.id]);
+		if (savedProfiles.length === 0 && !deletedProfile) {
 			toast.success($t('settings.saved'));
 			return;
 		}

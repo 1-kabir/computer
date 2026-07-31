@@ -17,6 +17,7 @@ from cptr.utils.config import (
     get_or_create_user,
     has_any_user,
     hash_password,
+    load_config,
     now_ms,
     pam_authenticate,
     record_attempt,
@@ -54,9 +55,18 @@ async def get_auth(request: Request):
 
     client_host = request.client.host if request.client else "127.0.0.1"
     token = request.cookies.get(COOKIE_NAME)
-    auth = check_access(client_host=client_host, jwt_token=token)
+    remote_user = None
+    if get_auth_mode() == AuthMode.TRUSTED_HEADER:
+        header_name = load_config().get("auth", {}).get("header", "Remote-User")
+        remote_user = request.headers.get(header_name)
+    auth = check_access(client_host=client_host, jwt_token=token, remote_user_header=remote_user)
+
+    if auth is not None and auth.username and not auth.user_id:
+        auth.user_id = await get_or_create_user(auth.username)
 
     if auth is not None and auth.user_id:
+        if not auth.exp:
+            auth.exp = time.time() + SESSION_MAX_AGE
         user = await User.get_by_id(auth.user_id)
         if user is None:
             from starlette.responses import JSONResponse as StarletteJSONResponse
@@ -77,7 +87,7 @@ async def get_auth(request: Request):
 
         # Sliding session: refresh token if past halfway to expiry
         remaining = auth.exp - time.time()
-        if remaining < SESSION_MAX_AGE / 2:
+        if remote_user or remaining < SESSION_MAX_AGE / 2:
             new_token = create_token(auth.user_id, auth.username, user.role)
             return _ok_with_cookie(new_token, data)
 

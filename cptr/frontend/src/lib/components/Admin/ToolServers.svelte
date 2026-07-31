@@ -36,12 +36,53 @@
 	let formCommand = $state('');
 	let formArgs = $state('');
 	let formCwd = $state('');
+	let formEnv = $state('');
 
 	let saving = $state(false);
 	let verifying = $state(false);
 
 	// Verify result
 	let verifyResult = $state<{ ok: boolean; tools?: any[]; message?: string } | null>(null);
+
+	function splitArgs(value: string): string[] {
+		const args: string[] = [];
+		let current = '';
+		let quote: string | null = null;
+		let started = false;
+
+		const input = value.trim();
+		for (let i = 0; i < input.length; i += 1) {
+			const ch = input[i];
+			const next = input[i + 1];
+			if (quote) {
+				started = true;
+				if (ch === quote) quote = null;
+				else if (ch === '\\' && (next === quote || next === '\\')) current += input[++i];
+				else current += ch;
+			} else if (ch === '"' || ch === "'") {
+				started = true;
+				quote = ch;
+			} else if (/\s/.test(ch)) {
+				if (started) {
+					args.push(current);
+					current = '';
+					started = false;
+				}
+			} else {
+				started = true;
+				current += ch;
+			}
+		}
+
+		if (started) args.push(current);
+		return args;
+	}
+
+	function joinArgs(args: string[]): string {
+		return args
+			.map((arg) => (!arg || /\s|["']/.test(arg) ? `"${arg.replace(/(["\\])/g, '\\$1')}"` : arg))
+			.join(' ');
+	}
 
 	async function load() {
 		try {
@@ -67,6 +108,7 @@
 		formCommand = '';
 		formArgs = '';
 		formCwd = '';
+		formEnv = '';
 
 		verifyResult = null;
 		showModal = true;
@@ -84,8 +126,9 @@
 		formDescription = s.description;
 		formHeaders = s.headers ? JSON.stringify(s.headers, null, 2) : '';
 		formCommand = s.command || '';
-		formArgs = (s.args || []).join(' ');
+		formArgs = joinArgs(s.args || []);
 		formCwd = s.cwd || '';
+		formEnv = s.env ? JSON.stringify(s.env, null, 2) : '';
 
 		verifyResult = null;
 		showModal = true;
@@ -119,6 +162,17 @@
 				return;
 			}
 		}
+		let parsedEnv: Record<string, string> | null = null;
+		if (isStdio && formEnv.trim()) {
+			try {
+				const v = JSON.parse(formEnv);
+				if (typeof v !== 'object' || v === null || Array.isArray(v)) throw 0;
+				parsedEnv = v;
+			} catch {
+				toast.error($t('toolServers.envInvalid'));
+				return;
+			}
+		}
 		saving = true;
 		try {
 			const data: Record<string, unknown> = {
@@ -140,8 +194,9 @@
 				description: formDescription.trim(),
 				headers: parsedHeaders || null,
 				command: formCommand.trim(),
-				args: formArgs.trim() ? formArgs.trim().split(/\s+/) : [],
-				cwd: formCwd.trim() || null
+				args: splitArgs(formArgs),
+				cwd: formCwd.trim() || null,
+				env: parsedEnv
 			};
 			if (editServer) {
 				if (formKey.trim()) data.key = formKey.trim();
@@ -360,6 +415,21 @@
 					spellcheck="false"
 					class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-none py-0.5 font-mono"
 				/>
+				<label for="tool-server-env" class="text-[0.625rem] text-gray-400 dark:text-gray-600 mt-2"
+					>{$t('toolServers.env')}</label
+				>
+				<p class="text-[0.625rem] text-gray-300 dark:text-gray-700 mb-0.5">
+					{$t('toolServers.envHint')}
+				</p>
+				<textarea
+					id="tool-server-env"
+					placeholder={'{"MAIL_TOKEN": "xxxx"}'}
+					bind:value={formEnv}
+					autocomplete="off"
+					spellcheck="false"
+					rows="2"
+					class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-none py-0.5 font-mono resize-none"
+				></textarea>
 			{/if}
 
 			<!-- Spec path (OpenAPI only) -->

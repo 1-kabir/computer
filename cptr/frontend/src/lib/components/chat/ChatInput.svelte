@@ -1607,6 +1607,12 @@
 	.chat-editor-mount :global(.chat-prosemirror ol) {
 		@apply mb-1 pl-4.5 text-sm;
 	}
+	.chat-editor-mount :global(.chat-prosemirror ul) {
+		list-style-type: disc;
+	}
+	.chat-editor-mount :global(.chat-prosemirror ol) {
+		list-style-type: decimal;
+	}
 	.chat-editor-mount :global(.chat-prosemirror li) {
 		@apply my-0.5;
 	}

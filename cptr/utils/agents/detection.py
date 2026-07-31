@@ -23,7 +23,7 @@ from cptr.utils.agents.models import (
 )
 
 DETECTION_TTL_SECONDS = 30
-CLAUDE_MODELS = [
+CLAUDE_MODEL_FALLBACKS = [
     "claude-fable-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -117,16 +117,49 @@ async def _run_probe(
 async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
     raw_command = str(profile.get("command") or "").strip()
     command = _resolve_command(raw_command)
-    if command is None and profile.get("agent") == "claude_code" and raw_command == "claude":
+    default_claude_command = profile.get("agent") == "claude_code" and raw_command == "claude"
+    if profile.get("agent") == "opencode" and str(profile.get("server_url") or "").strip():
+        version = None
+        if command is not None:
+            code, version_text = await _run_probe([command, "--version"])
+            version = version_text.splitlines()[0] if code == 0 and version_text else None
+        models = await _probe_opencode_models(command or raw_command or "opencode", profile)
+        if not models:
+            return AgentDetection(
+                "auth_unknown",
+                command,
+                version,
+                "Could not discover OpenCode models. Check connected OpenCode providers.",
+                [],
+            )
+        return AgentDetection("ready", command, version, None, models)
+
+    if command is None and default_claude_command:
         command = _find_claude_desktop_command()
     if command is None:
         return AgentDetection("not_found", None, None, "Command not found")
 
     code, version_text = await _run_probe([command, "--version"])
+    if code != 0 and default_claude_command:
+        desktop_command = _find_claude_desktop_command()
+        if desktop_command and desktop_command != command:
+            desktop_code, desktop_version_text = await _run_probe([desktop_command, "--version"])
+            if desktop_code == 0:
+                command = desktop_command
+                code = desktop_code
+                version_text = desktop_version_text
     version = version_text.splitlines()[0] if code == 0 and version_text else None
 
     if profile.get("agent") == "claude_code":
         models = _claude_models_for_version(version)
+        if code != 0:
+            return AgentDetection(
+                "error",
+                command,
+                version,
+                version_text or "Failed to run Claude Code health check.",
+                models,
+            )
         if importlib.util.find_spec("claude_agent_sdk") is None:
             return AgentDetection(
                 "missing_dependency",
@@ -257,7 +290,7 @@ def _version_at_least(version: tuple[int, int, int] | None, minimum: tuple[int, 
 def _claude_models_for_version(version: str | None) -> list[str]:
     parsed = _parse_version_tuple(version)
     models = []
-    for model in CLAUDE_MODELS:
+    for model in CLAUDE_MODEL_FALLBACKS:
         if model == "claude-fable-5" and not _version_at_least(parsed, MIN_CLAUDE_FABLE_5):
             continue
         if model == "claude-opus-4-8" and not _version_at_least(parsed, MIN_CLAUDE_OPUS_4_8):
@@ -578,17 +611,14 @@ async def get_agent_status(app_state=None, refresh: bool = False) -> dict[str, A
         if implicit_defaults and detected.status in {"not_found", "error"}:
             continue
         mode = profile.get("mode", "auto")
-        models = detected.models or profile.get("models") or []
-        available = (
-            mode != "disabled"
-            and bool(models)
-            and (mode != "auto" or detected.status == "ready")
-        )
+        models = list(dict.fromkeys([*(detected.models or []), *(profile.get("models") or [])]))
+        available = mode != "disabled" and (mode != "auto" or detected.status == "ready")
         effective_profile = dict(profile)
+        resolved_profile_command = _resolve_command(str(profile.get("command") or ""))
         if (
             detected.command
             and profile.get("agent") == "claude_code"
-            and _resolve_command(str(profile.get("command") or "")) is None
+            and detected.command != resolved_profile_command
         ):
             effective_profile["command"] = detected.command
         effective_profile["models"] = models

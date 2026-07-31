@@ -1,6 +1,6 @@
 [project]
 name = "cptr"
-version = "0.9.15"
+version = "0.9.16"
 description = "Your computer, from anywhere. Code, manage, and control your machine from the web."
 license = {file = "LICENSE"}
 readme = "README.md"
@@ -25,11 +25,11 @@ dependencies = [
 
 [project.optional-dependencies]
 pam = ["python-pam>=2.0"]
-mcp = ["mcp>=1.8"]
+mcp = ["mcp>=1.8,<2"]
 docs = ["pypdf>=4.0", "python-docx>=1.0", "openpyxl>=3.1"]
 agents = ["claude-agent-sdk>=0.1.62"]
 all = [
-    "mcp>=1.8",
+    "mcp>=1.8,<2",
     "pypdf>=4.0",
     "python-docx>=1.0",
     "openpyxl>=3.1",

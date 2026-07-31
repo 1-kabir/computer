@@ -45,9 +45,6 @@ async def resolve_agent_model_target(model_id: str, app_state=None) -> AgentMode
         raise HTTPException(400, f"agent profile not found: {profile_id}")
 
     profile = entry["config"]
-    if model not in (profile.get("models") or []):
-        raise HTTPException(400, f"model '{model}' is not configured for agent profile {profile_id}")
-
     if not entry["available"]:
         detection = entry.get("detected") or {}
         raise HTTPException(

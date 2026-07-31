@@ -174,7 +174,15 @@ async def put_workspace(request: Request, path: str = Query(...)):
         return {"status": "skipped"}
     workspace_path = _resolve_workspace_path(path)
     workspace_data = await request.json()
-    name = workspace_data.pop("name", _workspace_display_name(workspace_path))
+    existing_workspace = _newest_workspace(await _workspaces_at_path(user_id, workspace_path))
+    if "name" in workspace_data:
+        name = workspace_data.pop("name")
+    else:
+        name = (
+            existing_workspace.name
+            if existing_workspace
+            else _workspace_display_name(workspace_path)
+        )
     workspace_data.pop("path", None)
     # Everything else is workspace data (groups, tabs, etc.)
     await Workspace.upsert(user_id, workspace_path, name, workspace_data)
@@ -351,7 +359,7 @@ def _collect_system_info() -> dict:
     # Load average
     try:
         load = os.getloadavg()
-        system["load_avg"] = [round(l, 2) for l in load]
+        system["load_avg"] = [round(value, 2) for value in load]
     except Exception:
         pass
 

@@ -20,6 +20,9 @@ from cptr.utils.agents.events import (
 from cptr.utils.agents.prompts import latest_user_text
 
 
+_claude_clients: dict[str, tuple[Any, tuple[Any, ...]]] = {}
+
+
 def _claude_query_input(
     prompt: str, attachments: PreparedAgentAttachments
 ) -> str | AsyncIterator[dict[str, Any]]:
@@ -64,6 +67,19 @@ def _permission_mode(chat_approval_mode: str) -> str:
     if chat_approval_mode == "auto":
         return "acceptEdits"
     return "default"
+
+
+async def _disconnect_cached_claude_client(session_id: str) -> None:
+    cached = _claude_clients.pop(session_id, None)
+    if cached:
+        await cached[0].disconnect()
+
+
+async def _clear_claude_client_cache() -> None:
+    cached_clients = list(_claude_clients.values())
+    _claude_clients.clear()
+    for client, _ in cached_clients:
+        await client.disconnect()
 
 
 def _tool_update_from_claude_start(
@@ -111,15 +127,19 @@ async def run_claude_code_agent(
 
     prompt = latest_user_text(messages)
     env = os.environ.copy()
-    if profile.get("home"):
-        env["HOME"] = os.path.expanduser(str(profile["home"]))
+    home = os.path.expanduser(str(profile["home"])) if profile.get("home") else None
+    if home:
+        env["HOME"] = home
 
     permission_mode = _permission_mode(_chat_approval_mode(chat_params))
     launch_args = str(profile.get("launch_args") or "").strip()
-    extra_args = shlex.split(launch_args) if launch_args else []
+    extra_args = tuple(shlex.split(launch_args)) if launch_args else ()
+    command = str(profile["command"])
+    cache_key = (workspace, command, home, extra_args, model, permission_mode)
 
+    session_id = None
+    client = None
     try:
-        session_id = None
         if resume_state:
             value = resume_state.get("session_id")
             session_id = value if isinstance(value, str) and value else None
@@ -139,12 +159,22 @@ async def run_claude_code_agent(
             options_kwargs["extra_args"] = {arg: None for arg in extra_args}
 
         options = sdk.ClaudeAgentOptions(**options_kwargs)
-        options.cli_path = str(profile["command"])
+        options.cli_path = command
         if model != "default":
             options.model = model
 
-        client = sdk.ClaudeSDKClient(options)
-        await client.connect()
+        cached = None
+        if session_id:
+            cached = _claude_clients.get(session_id)
+            if cached and cached[1] != cache_key:
+                await _disconnect_cached_claude_client(session_id)
+                cached = None
+
+        if cached:
+            client = cached[0]
+        else:
+            client = sdk.ClaudeSDKClient(options)
+            await client.connect()
 
         try:
             query_input = _claude_query_input(prompt, attachments)
@@ -229,6 +259,15 @@ async def run_claude_code_agent(
                         }
                     break
 
+            if observed_session_id:
+                old_client = _claude_clients.pop(session_id, (None,))[0] if session_id else None
+                if old_client is not None and old_client is not client:
+                    await old_client.disconnect()
+                _claude_clients[observed_session_id] = (client, cache_key)
+                session_id = observed_session_id
+            else:
+                await client.disconnect()
+
             yield AgentDone(
                 usage=usage,
                 resume_state={
@@ -238,9 +277,17 @@ async def run_claude_code_agent(
                     "model": model,
                 },
             )
-        finally:
-            await client.disconnect()
+        except Exception:
+            if session_id:
+                await _disconnect_cached_claude_client(session_id)
+            else:
+                await client.disconnect()
+            raise
     except asyncio.CancelledError:
+        if session_id:
+            await _disconnect_cached_claude_client(session_id)
+        elif client is not None:
+            await client.disconnect()
         raise
     except Exception as exc:  # noqa: BLE001 - surfaced in the chat.
         yield AgentError(str(exc))

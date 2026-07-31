@@ -174,6 +174,14 @@ The default image includes Git and GitHub CLI (`gh`). Use `ghcr.io/open-webui/co
 
 If you bind-mount a host directory to `/data`, make sure that directory is writable by the container user. SQLite needs to create and update `/data/app.db`, and host directory permissions take precedence over the image's built-in `/data` ownership.
 
+To connect a host-running OpenCode server from Docker, start OpenCode on a host-reachable interface and set the OpenCode agent Server URL to the Docker host address:
+
+```bash
+opencode serve --hostname 0.0.0.0 --port 4096
+```
+
+Use `http://host.docker.internal:4096` on Docker Desktop. On Linux, add `--add-host=host.docker.internal:host-gateway` to `docker run` if that hostname is not already available.
+
 The `:dev` image is also available and tracks the `main` branch.
 
 ## Air-gapped installation

@@ -289,6 +289,14 @@
 		padding-left: 1.25rem;
 	}
 
+	.rte-container :global(.rte-prosemirror ul) {
+		list-style-type: disc;
+	}
+
+	.rte-container :global(.rte-prosemirror ol) {
+		list-style-type: decimal;
+	}
+
 	.rte-container :global(.rte-prosemirror li) {
 		margin: 0.25rem 0;
 	}

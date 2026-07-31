@@ -392,6 +392,8 @@ def check_access(
             return None
         if remote_user_header:
             return AuthResult(username=remote_user_header)
+        if jwt_token:
+            return verify_token(jwt_token)
         return None
 
     return None

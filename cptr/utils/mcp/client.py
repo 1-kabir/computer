@@ -81,6 +81,9 @@ class MCPClient:
             env: Optional environment variables for the process.
             cwd: Optional working directory.
         """
+        command = command.strip()
+        if len(command) > 1 and command[0] == command[-1] and command[0] in ("'", '"'):
+            command = command[1:-1]
         params = StdioServerParameters(
             command=command,
             args=args or [],
