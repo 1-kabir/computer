@@ -2290,7 +2290,15 @@ async def run_chat_task(
                             pass
 
                     asyncio.create_task(auto_answer())
-                    await emit(done=True)
+                    await emit(
+                        done=True,
+                        status="input_required",
+                        title=chat_obj.title if chat_obj else None,
+                        workspace=workspace,
+                        workspace_name=workspace.rstrip("/").rsplit("/", 1)[-1]
+                        if workspace
+                        else "",
+                    )
                     return
 
                 # Check if any call needs approval
@@ -2333,7 +2341,16 @@ async def run_chat_task(
                         await emit(output=flushed_item)
                         await emit(output=item)
                     _task_state.pop(message_id, None)
-                    await emit(done=True)
+                    await emit(
+                        done=True,
+                        status="approval_required",
+                        title=chat_obj.title if chat_obj else None,
+                        tool_name=tc["name"],
+                        workspace=workspace,
+                        workspace_name=workspace.rstrip("/").rsplit("/", 1)[-1]
+                        if workspace
+                        else "",
+                    )
                     return
 
                 # All calls are auto-approved — build UI items

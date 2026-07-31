@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 from cptr.models import Chat, ChatMessage, Config
 from cptr.models.workspaces import Workspace
+from cptr.utils.agents.prompts import message_text
 from cptr.utils.config import now_ms
 
 logger = logging.getLogger(__name__)
@@ -281,10 +282,40 @@ async def _resolve_messages(
             (m for m in reversed(messages) if m.get("role") == "user"),
             None,
         )
-        user_content = (last_user.get("content", "") if last_user else "") or ""
+        user_content = message_text(last_user).strip() if last_user else ""
 
     # Determine parent for the user message
     cptr_parent_id = chat.current_message_id if chat else None
+
+    # First time this OWUI chat reaches cptr, copy the request's existing
+    # transcript into the parent chain so the native agent can cold-start with it.
+    if chat and not chat.current_message_id and messages:
+        last_user_index = None
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index].get("role") == "user":
+                last_user_index = index
+                break
+        if last_user_index:
+            created_at = now_ms()
+            for offset, message in enumerate(messages[:last_user_index]):
+                role = message.get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                content = message_text(message).strip()
+                if not content:
+                    continue
+                imported = await ChatMessage.create(
+                    chat_id=chat_id,
+                    role=role,
+                    content=content,
+                    parent_id=cptr_parent_id,
+                    done=True,
+                    created_at=created_at + offset,
+                )
+                cptr_parent_id = imported.id
+                owui_id = str(message.get("id") or "").strip()
+                if owui_id:
+                    msg_map[owui_id] = imported.id
 
     if owui_user_id and owui_user_id in msg_map:
         # User message already exists in cptr (regeneration case)

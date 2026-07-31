@@ -7,6 +7,7 @@ import { fetchJSON } from '$lib/apis';
 import { socketStore } from '$lib/stores/socket.svelte';
 import { activeTab } from '$lib/stores';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
+import { i18next } from '$lib/i18n';
 
 export const chatEnabled = writable<boolean>(false);
 
@@ -139,9 +140,11 @@ export function bindGlobalChatListener() {
 		(data: {
 			type?: string;
 			chat_id: string;
+			status?: string;
 			done?: boolean;
 			title?: string;
 			content?: string;
+			tool_name?: string;
 			workspace?: string;
 			workspace_name?: string;
 			active?: boolean;
@@ -187,8 +190,24 @@ export function bindGlobalChatListener() {
 			const workspacePath = isSupportedWorkspacePath(data.workspace) ? data.workspace : '';
 			const workspaceDisplayName = data.workspace_name || getPathDisplayName(workspacePath);
 			const workspaceTitlePrefix = workspaceDisplayName ? `[${workspaceDisplayName}] ` : '';
-			const title = `${workspaceTitlePrefix}${data.title || 'Chat'}`;
-			const body = data.content || '';
+			const chatTitle = data.title || i18next.t('chat.fallbackTitle');
+			const approvalRequired = data.status === 'approval_required';
+			const inputRequired = data.status === 'input_required';
+			const toolName = data.tool_name?.replace(/_/g, ' ');
+			const title = approvalRequired
+				? `${workspaceTitlePrefix}${i18next.t('chat.notification.approvalTitle', { title: chatTitle })}`
+				: inputRequired
+					? `${workspaceTitlePrefix}${i18next.t('chat.notification.inputTitle', { title: chatTitle })}`
+					: `${workspaceTitlePrefix}${chatTitle}`;
+			const body =
+				data.content ||
+				(approvalRequired
+					? i18next.t('chat.notification.approvalBody', {
+							tool: toolName || i18next.t('chat.notification.thisTool')
+						})
+					: inputRequired
+						? i18next.t('chat.notification.inputBody')
+						: i18next.t('chat.notification.finishedBody'));
 			const openChat = async () => {
 				const { goto } = await import('$app/navigation');
 				const workspaceQuery = workspacePath
