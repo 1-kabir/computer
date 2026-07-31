@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.19] - 2026-07-31
+
+### Changed
+
+- 🌐 **Open WebUI setup is clearer.** The gateway setup snippet now includes the user details Open WebUI can pass along, making connected chats easier to recognize.
+- 🧰 **Action labels are easier to follow.** Connected chats and Claude Code now show names that better match the action being taken.
+- 🤖 **Codex asks before taking more actions in Auto mode.** Auto approval now follows the same review path as ask-first sessions, so approval prompts appear more consistently.
+
+### Fixed
+
+- 💬 **Chats recover better when a model service is busy.** If a connection asks Computer to try again before anything has started, Computer now waits the requested time and retries instead of failing right away.
+- 🧰 **Claude Code progress stays accurate.** Action details are kept together from start to finish, including when Claude Code only reports the final action.
+
 ## [0.9.18] - 2026-07-31
 
 ### Added

@@ -67,7 +67,10 @@ def _format_tool_call(item: dict) -> str | None:
     if item.get("type") != "function_call" or item.get("status") != "in_progress":
         return None
 
-    return f"\n\n`{item.get('name', 'tool')}`\n\n"
+    arguments = item.get("arguments")
+    title = arguments.get("title") if isinstance(arguments, dict) else None
+    name = str(title or item.get("name") or "tool").strip() or "tool"
+    return f"\n\n`{name}`\n\n"
 
 
 async def _authenticate(request: Request) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 from typing import Any, AsyncIterator
@@ -103,7 +104,7 @@ def _tool_update_from_claude_start(
             call_id=call_id.strip(),
             name="agent_tool",
             status="in_progress",
-            arguments={"title": name, **arguments},
+            arguments={**arguments, "title": name},
         ),
     )
 
@@ -188,6 +189,8 @@ async def run_claude_code_agent(
             usage: dict[str, Any] | None = None
             observed_session_id = session_id
             tool_calls: dict[int, AgentToolUpdate] = {}
+            tool_input_json: dict[int, str] = {}
+            received_tool_call_ids: set[str] = set()
             received_text_delta = False
             received_thinking_delta = False
 
@@ -212,9 +215,18 @@ async def run_claude_code_agent(
                                 yield AgentReasoningDelta(thinking)
                                 if thinking:
                                     received_thinking_delta = True
+                            elif delta.get("type") == "input_json_delta" and isinstance(
+                                delta.get("partial_json"), str
+                            ):
+                                index = event.get("index")
+                                if isinstance(index, int):
+                                    tool_input_json[index] = (
+                                        tool_input_json.get(index, "") + delta["partial_json"]
+                                    )
                     elif event_type == "content_block_start":
                         index, tool = _tool_update_from_claude_start(event)
                         if tool:
+                            received_tool_call_ids.add(tool.call_id)
                             if index is not None:
                                 tool_calls[index] = tool
                             yield tool
@@ -222,11 +234,23 @@ async def run_claude_code_agent(
                         index = event.get("index")
                         tool = tool_calls.get(index) if isinstance(index, int) else None
                         if tool:
+                            arguments = dict(tool.arguments or {})
+                            title = str(arguments.pop("title", None) or "Claude action")
+                            input_json = (
+                                tool_input_json.get(index) if isinstance(index, int) else None
+                            )
+                            if input_json and input_json.strip():
+                                try:
+                                    parsed = json.loads(input_json)
+                                    if isinstance(parsed, dict):
+                                        arguments = parsed
+                                except json.JSONDecodeError:
+                                    pass
                             yield AgentToolUpdate(
                                 call_id=tool.call_id,
                                 name=tool.name,
                                 status="completed",
-                                arguments=tool.arguments,
+                                arguments={**arguments, "title": title},
                                 output="",
                             )
                     continue
@@ -246,6 +270,28 @@ async def run_claude_code_agent(
                             text = getattr(block, "thinking", "")
                             if text:
                                 yield AgentReasoningDelta(text)
+                        elif block.__class__.__name__ == "ToolUseBlock":
+                            call_id = getattr(block, "id", None)
+                            if (
+                                isinstance(call_id, str)
+                                and call_id.strip()
+                                and call_id not in received_tool_call_ids
+                            ):
+                                title = str(
+                                    getattr(block, "name", None)
+                                    or getattr(block, "type", None)
+                                    or "Claude action"
+                                ).strip()
+                                raw_input = getattr(block, "input", None)
+                                arguments = raw_input if isinstance(raw_input, dict) else {}
+                                received_tool_call_ids.add(call_id)
+                                yield AgentToolUpdate(
+                                    call_id=call_id.strip(),
+                                    name="agent_tool",
+                                    status="completed",
+                                    arguments={**arguments, "title": title},
+                                    output="",
+                                )
                 elif class_name == "ResultMessage":
                     observed_session_id = (
                         getattr(message, "session_id", None) or observed_session_id

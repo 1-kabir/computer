@@ -13,8 +13,10 @@ import asyncio
 import copy
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
+from email.utils import parsedate_to_datetime
 from typing import Dict, List
 
 import httpx
@@ -51,6 +53,8 @@ def _openrouter_headers(url: str) -> dict[str, str]:
 
 
 _STREAM_RETRY_ATTEMPTS = 3
+_STREAM_RETRY_MAX_DELAY_SECONDS = 30
+_STREAM_RETRY_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 _STREAM_TIMEOUT = httpx.Timeout(
     STREAM_CONNECT_TIMEOUT_SECONDS,
     read=STREAM_READ_TIMEOUT_SECONDS,
@@ -59,6 +63,7 @@ _STREAM_TIMEOUT = httpx.Timeout(
 _STREAM_RETRY_ERRORS = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
+    httpx.HTTPStatusError,
     httpx.ReadError,
     httpx.ReadTimeout,
     httpx.RemoteProtocolError,
@@ -73,6 +78,32 @@ class ChatCompletionForm(BaseModel):
     messages: List[Dict]
     instructions: str = ""
     tools: List[Dict] = []
+
+
+def _is_retryable_stream_error(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _STREAM_RETRY_STATUS_CODES
+    return isinstance(exc, _STREAM_RETRY_ERRORS)
+
+
+def _stream_retry_delay(exc: BaseException, attempt: int) -> float:
+    delay = 0.5 * (attempt + 1)
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return delay
+
+    retry_after = exc.response.headers.get("retry-after")
+    if not retry_after:
+        return delay
+
+    try:
+        delay = float(retry_after)
+    except ValueError:
+        try:
+            delay = parsedate_to_datetime(retry_after).timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return delay
+
+    return min(max(delay, 0), _STREAM_RETRY_MAX_DELAY_SECONDS)
 
 
 # ── Non-streaming completion ────────────────────────────────
@@ -377,8 +408,8 @@ async def stream_anthropic(
                             emitted = True
                             yield {"type": "done"}
             return
-        except _STREAM_RETRY_ERRORS:
-            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1:
+        except _STREAM_RETRY_ERRORS as exc:
+            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1 or not _is_retryable_stream_error(exc):
                 raise
             logger.warning(
                 "[stream] anthropic transient stream failure before first event; retrying (%s/%s)",
@@ -386,7 +417,7 @@ async def stream_anthropic(
                 _STREAM_RETRY_ATTEMPTS,
                 exc_info=True,
             )
-            await asyncio.sleep(0.5 * (attempt + 1))
+            await asyncio.sleep(_stream_retry_delay(exc, attempt))
 
 
 # ── OpenAI Chat Completions ──────────────────────────────────
@@ -657,8 +688,8 @@ async def stream_openai_completions(
                     emitted = True
                     yield {"type": "done"}
             return
-        except _STREAM_RETRY_ERRORS:
-            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1:
+        except _STREAM_RETRY_ERRORS as exc:
+            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1 or not _is_retryable_stream_error(exc):
                 raise
             logger.warning(
                 "[stream] openai completions transient stream failure before first event; retrying (%s/%s)",
@@ -666,7 +697,7 @@ async def stream_openai_completions(
                 _STREAM_RETRY_ATTEMPTS,
                 exc_info=True,
             )
-            await asyncio.sleep(0.5 * (attempt + 1))
+            await asyncio.sleep(_stream_retry_delay(exc, attempt))
 
 
 # ── OpenAI Responses API ─────────────────────────────────────
@@ -974,8 +1005,8 @@ async def stream_openai_responses(
                             emitted = True
                             yield {"type": "done"}
             return
-        except _STREAM_RETRY_ERRORS:
-            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1:
+        except _STREAM_RETRY_ERRORS as exc:
+            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1 or not _is_retryable_stream_error(exc):
                 raise
             logger.warning(
                 "[stream] openai responses transient stream failure before first event; retrying (%s/%s)",
@@ -983,4 +1014,4 @@ async def stream_openai_responses(
                 _STREAM_RETRY_ATTEMPTS,
                 exc_info=True,
             )
-            await asyncio.sleep(0.5 * (attempt + 1))
+            await asyncio.sleep(_stream_retry_delay(exc, attempt))

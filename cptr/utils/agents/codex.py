@@ -211,7 +211,7 @@ class CodexAppServer:
 
 
 def _approval_policy(value: str) -> str:
-    return {"ask": "on-request", "auto": "on-failure", "full": "never"}.get(value, "on-failure")
+    return {"ask": "on-request", "auto": "on-request", "full": "never"}.get(value, "on-request")
 
 
 def _chat_approval_mode(chat_params: dict[str, Any]) -> str:
