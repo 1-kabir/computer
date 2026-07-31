@@ -30,6 +30,10 @@
 	/** Newly created key, shown once, then hidden */
 	let revealedKey = $state('');
 	const openWebUIHeaders = `{
+  "X-OpenWebUI-User-Name": "{{USER_NAME}}",
+  "X-OpenWebUI-User-Id": "{{USER_ID}}",
+  "X-OpenWebUI-User-Email": "{{USER_EMAIL}}",
+  "X-OpenWebUI-User-Role": "{{USER_ROLE}}",
   "X-OpenWebUI-Chat-Id": "{{CHAT_ID}}",
   "X-OpenWebUI-Message-Id": "{{MESSAGE_ID}}",
   "X-OpenWebUI-User-Message-Id": "{{USER_MESSAGE_ID}}",
