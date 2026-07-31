@@ -732,7 +732,7 @@ async def _ensure_chat(
     title = "Open WebUI Chat"
     if messages:
         first_user = next(
-            (m.get("content", "")[:50] for m in messages if m.get("role") == "user"),
+            (message_text(m)[:50] for m in messages if m.get("role") == "user"),
             None,
         )
         if first_user:
