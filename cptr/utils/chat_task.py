@@ -1906,7 +1906,7 @@ async def run_chat_task(
         # Plan mode: strip write tools, inject prompt as user message (not system, to preserve cache)
         plan_mode = chat_params.get("plan_mode", False)
         if plan_mode:
-            tools = [t for t in tools if ALL_TOOLS.get(t["name"], {}).get("auto")]
+            tools = [t for t in tools if not ALL_TOOLS.get(t["name"], {}).get("ask", True)]
             tools = [t for t in tools if t["name"] not in {"delegate_task", "update_memory"}]
             tools.append(_fn_to_schema("create_artifact", create_artifact))
             tools.append(ASK_USER_SCHEMA)
@@ -1934,7 +1934,7 @@ async def run_chat_task(
 
         # Tool approval mode: 'ask' | 'auto' | 'full'
         #   ask  = require approval for ALL tools (including reads)
-        #   auto = auto-approve tools marked auto=True, ask for others
+        #   auto = run ask:false tools; review ask:true tools before prompting
         #   full = auto-approve everything
         approval_mode = chat_params.get("tool_approval_mode", "auto")
         # Legacy compat: old boolean auto_approve_tools
@@ -1966,7 +1966,7 @@ async def run_chat_task(
                 name = item.get("name", "")
                 tool = ALL_TOOLS.get(name)
                 should_auto = approval_mode == "full" or (
-                    approval_mode == "auto" and tool and tool["auto"]
+                    approval_mode == "auto" and tool and not tool.get("ask", True)
                 )
                 if (
                     not should_auto
@@ -2474,7 +2474,7 @@ async def run_chat_task(
                             loaded_skill_names.add(skill_name)
                     tool = ALL_TOOLS.get(name)
                     should_auto = approval_mode == "full" or (
-                        approval_mode == "auto" and tool and tool["auto"]
+                        approval_mode == "auto" and tool and not tool.get("ask", True)
                     )
                     if not should_auto:
                         needs_approval = tc
