@@ -542,18 +542,18 @@ Files:
 				</button>
 			</div>
 
-			<div class="flex items-center justify-between gap-3 mb-1">
-				<div class="min-w-0">
-					<h3 class="text-xs text-gray-600 dark:text-gray-400">
+			<div class="mb-1">
+				<div class="flex items-center justify-between gap-3">
+					<h3 class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
 						{$t('models.defaultModel')}
 					</h3>
-					<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
-						{$t('models.defaultModelHint')}
+					<div class="shrink-0">
+						<ModelSelector bind:selectedModel={defaultModelId} preferAbove={false} />
 					</div>
 				</div>
-				<div class="shrink-0">
-					<ModelSelector bind:selectedModel={defaultModelId} preferAbove={false} />
-				</div>
+				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+					{$t('models.defaultModelHint')}
+				</p>
 			</div>
 
 			<!-- Global defaults -->

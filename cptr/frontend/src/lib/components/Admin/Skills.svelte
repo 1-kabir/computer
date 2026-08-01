@@ -102,23 +102,23 @@
 						/>
 					</label>
 
-					<div class="flex items-center justify-between gap-3">
-						<div class="min-w-0">
-							<div class="text-xs text-gray-600 dark:text-gray-400">
+					<div>
+						<div class="flex items-center justify-between gap-3">
+							<span class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
 								{$t('admin.skillsBackgroundReviewModel')}
-							</div>
-							<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
-								{$t('admin.skillsBackgroundReviewModelHint')}
+							</span>
+							<div class="shrink-0">
+								<ModelSelector
+									bind:selectedModel={backgroundReviewModel}
+									nullable
+									nullLabel={$t('modelSelector.currentModel')}
+									preferAbove={false}
+								/>
 							</div>
 						</div>
-						<div class="shrink-0">
-							<ModelSelector
-								bind:selectedModel={backgroundReviewModel}
-								nullable
-								nullLabel={$t('modelSelector.currentModel')}
-								preferAbove={false}
-							/>
-						</div>
+						<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+							{$t('admin.skillsBackgroundReviewModelHint')}
+						</p>
 					</div>
 				{/if}
 			</div>

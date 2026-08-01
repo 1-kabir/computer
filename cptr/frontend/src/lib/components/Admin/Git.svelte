@@ -44,23 +44,23 @@
 		<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5 -mr-1.5">
 			<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">{$t('admin.git')}</h2>
 
-			<div class="flex items-center justify-between gap-3">
-				<div class="min-w-0">
-					<div class="text-xs text-gray-600 dark:text-gray-400">
+			<div>
+				<div class="flex items-center justify-between gap-3">
+					<span class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
 						{$t('admin.gitCommitMessageModel')}
-					</div>
-					<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
-						{$t('admin.gitCommitMessageModelHint')}
+					</span>
+					<div class="shrink-0">
+						<ModelSelector
+							bind:selectedModel={commitMessageModel}
+							nullable
+							nullLabel={$t('modelSelector.defaultModel')}
+							preferAbove={false}
+						/>
 					</div>
 				</div>
-				<div class="shrink-0">
-					<ModelSelector
-						bind:selectedModel={commitMessageModel}
-						nullable
-						nullLabel={$t('modelSelector.defaultModel')}
-						preferAbove={false}
-					/>
-				</div>
+				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+					{$t('admin.gitCommitMessageModelHint')}
+				</p>
 			</div>
 		</div>
 

@@ -71,15 +71,10 @@
 				{$t('admin.chatTitles')}
 			</h3>
 			<div class="flex flex-col gap-2.5">
-				<label class="flex items-center justify-between gap-3 cursor-pointer">
-					<div class="min-w-0">
-						<div class="text-xs text-gray-600 dark:text-gray-400">
-							{$t('admin.chatTitleGeneration')}
-						</div>
-						<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
-							{$t('admin.chatTitleGenerationHint')}
-						</div>
-					</div>
+				<label class="flex items-center justify-between cursor-pointer">
+					<span class="text-xs text-gray-600 dark:text-gray-400">
+						{$t('admin.chatTitleGeneration')}
+					</span>
 					<ToggleSwitch
 						value={titleGenerationEnabled}
 						onchange={(value) => {
@@ -87,25 +82,28 @@
 						}}
 					/>
 				</label>
+				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+					{$t('admin.chatTitleGenerationHint')}
+				</p>
 
 				{#if titleGenerationEnabled}
-					<div class="flex items-center justify-between gap-3">
-						<div class="min-w-0">
-							<div class="text-xs text-gray-600 dark:text-gray-400">
+					<div>
+						<div class="flex items-center justify-between gap-3">
+							<span class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
 								{$t('admin.chatTitleModel')}
-							</div>
-							<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
-								{$t('admin.chatTitleModelHint')}
+							</span>
+							<div class="shrink-0">
+								<ModelSelector
+									bind:selectedModel={titleGenerationModel}
+									nullable
+									nullLabel={$t('modelSelector.currentModel')}
+									preferAbove={false}
+								/>
 							</div>
 						</div>
-						<div class="shrink-0">
-							<ModelSelector
-								bind:selectedModel={titleGenerationModel}
-								nullable
-								nullLabel={$t('modelSelector.currentModel')}
-								preferAbove={false}
-							/>
-						</div>
+						<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+							{$t('admin.chatTitleModelHint')}
+						</p>
 					</div>
 				{/if}
 			</div>
@@ -114,23 +112,23 @@
 				{$t('admin.contextCompaction')}
 			</h3>
 			<div class="flex flex-col gap-2.5">
-				<div class="flex items-center justify-between gap-3">
-					<div class="min-w-0">
-						<div class="text-xs text-gray-600 dark:text-gray-400">
+				<div>
+					<div class="flex items-center justify-between gap-3">
+						<span class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
 							{$t('admin.contextSummaryModel')}
-						</div>
-						<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
-							{$t('admin.contextSummaryModelHint')}
+						</span>
+						<div class="shrink-0">
+							<ModelSelector
+								bind:selectedModel={contextCompactionModel}
+								nullable
+								nullLabel={$t('modelSelector.currentModel')}
+								preferAbove={false}
+							/>
 						</div>
 					</div>
-					<div class="shrink-0">
-						<ModelSelector
-							bind:selectedModel={contextCompactionModel}
-							nullable
-							nullLabel={$t('modelSelector.currentModel')}
-							preferAbove={false}
-						/>
-					</div>
+					<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+						{$t('admin.contextSummaryModelHint')}
+					</p>
 				</div>
 				<div>
 					<label class="text-xs text-gray-600 dark:text-gray-400" for="compact-threshold">
@@ -159,23 +157,23 @@
 			<h3 class="text-xs text-gray-400 dark:text-gray-600 mb-2 mt-5">
 				{$t('admin.toolApproval')}
 			</h3>
-			<div class="flex items-center justify-between gap-3">
-				<div class="min-w-0">
-					<div class="text-xs text-gray-600 dark:text-gray-400">
+			<div>
+				<div class="flex items-center justify-between gap-3">
+					<span class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
 						{$t('admin.toolApprovalReviewModel')}
-					</div>
-					<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
-						{$t('admin.toolApprovalReviewModelHint')}
+					</span>
+					<div class="shrink-0">
+						<ModelSelector
+							bind:selectedModel={toolApprovalReviewModel}
+							nullable
+							nullLabel={$t('modelSelector.currentModel')}
+							preferAbove={false}
+						/>
 					</div>
 				</div>
-				<div class="shrink-0">
-					<ModelSelector
-						bind:selectedModel={toolApprovalReviewModel}
-						nullable
-						nullLabel={$t('modelSelector.currentModel')}
-						preferAbove={false}
-					/>
-				</div>
+				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+					{$t('admin.toolApprovalReviewModelHint')}
+				</p>
 			</div>
 		</div>
 
