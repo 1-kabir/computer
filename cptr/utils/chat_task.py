@@ -56,6 +56,7 @@ from cptr.utils.tools import (
     disabled_builtin_tool_names,
     execute_tool,
     get_tool_list,
+    resolve_builtin_tool_approval,
     _fn_to_schema,
 )
 from cptr.utils.chat_export import export_chat_to_file
@@ -742,6 +743,7 @@ async def review_tool_approval(
     model: str,
     tool_name: str,
     arguments: dict,
+    approval_policy: str = "review",
 ) -> bool:
     """Return True when Auto mode can run a pending tool without prompting."""
     latest_user = ""
@@ -754,8 +756,9 @@ async def review_tool_approval(
         args_text = args_text[:3500] + "\n...(truncated)"
     configured_model = await Config.get("tool_approval.review.model")
     logger.info(
-        "[tool-approval] auto review start tool=%s active_model=%s review_model=%s args=%s",
+        "[tool-approval] auto review start tool=%s policy=%s active_model=%s review_model=%s args=%s",
         tool_name,
+        approval_policy,
         model,
         configured_model or "<current>",
         args_text[:1000],
@@ -1925,7 +1928,7 @@ async def run_chat_task(
         # Plan mode: strip write tools, inject prompt as user message (not system, to preserve cache)
         plan_mode = chat_params.get("plan_mode", False)
         if plan_mode:
-            tools = [t for t in tools if not ALL_TOOLS.get(t["name"], {}).get("ask", True)]
+            tools = [t for t in tools if await resolve_builtin_tool_approval(t["name"]) == "allow"]
             tools = [t for t in tools if t["name"] not in {"delegate_task", "update_memory"}]
             tools.append(_fn_to_schema("create_artifact", create_artifact))
             tools.append(ASK_USER_SCHEMA)
@@ -1953,7 +1956,7 @@ async def run_chat_task(
 
         # Tool approval mode: 'ask' | 'auto' | 'full'
         #   ask  = require approval for ALL tools (including reads)
-        #   auto = run ask:false tools; review ask:true tools before prompting
+        #   auto = run allow tools; review review tools before prompting
         #   full = auto-approve everything
         approval_mode = chat_params.get("tool_approval_mode", "auto")
         # Legacy compat: old boolean auto_approve_tools
@@ -1984,8 +1987,9 @@ async def run_chat_task(
 
                 name = item.get("name", "")
                 tool = ALL_TOOLS.get(name)
+                tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
                 should_auto = approval_mode == "full" or (
-                    approval_mode == "auto" and tool and not tool.get("ask", True)
+                    approval_mode == "auto" and tool and tool_approval == "allow"
                 )
                 if (
                     not should_auto
@@ -1999,6 +2003,7 @@ async def run_chat_task(
                         model=model,
                         tool_name=name,
                         arguments=item.get("arguments") or {},
+                        approval_policy=tool_approval,
                     )
                 ):
                     item["approved"] = True
@@ -2492,8 +2497,9 @@ async def run_chat_task(
                         if skill_name:
                             loaded_skill_names.add(skill_name)
                     tool = ALL_TOOLS.get(name)
+                    tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
                     should_auto = approval_mode == "full" or (
-                        approval_mode == "auto" and tool and not tool.get("ask", True)
+                        approval_mode == "auto" and tool and tool_approval == "allow"
                     )
                     if not should_auto:
                         needs_approval = tc

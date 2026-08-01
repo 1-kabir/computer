@@ -12,7 +12,6 @@
 	let titleGenerationEnabled = $state(true);
 	let titleGenerationModel = $state<string | null>(null);
 	let contextCompactionModel = $state<string | null>(null);
-	let toolApprovalReviewModel = $state<string | null>(null);
 	let compactTokenThreshold = $state(80000);
 
 	onMount(async () => {
@@ -29,10 +28,6 @@
 				typeof config['chat.context_compaction.model'] === 'string'
 					? config['chat.context_compaction.model']
 					: null;
-			toolApprovalReviewModel =
-				typeof config['tool_approval.review.model'] === 'string'
-					? config['tool_approval.review.model']
-					: null;
 			compactTokenThreshold = Number(config['chat.compact_token_threshold']) || 80000;
 		} catch {
 			toast.error($t('admin.failedToLoadConfig'));
@@ -48,7 +43,6 @@
 				'chat.title_generation.enabled': titleGenerationEnabled,
 				'chat.title_generation.model': titleGenerationModel,
 				'chat.context_compaction.model': contextCompactionModel,
-				'tool_approval.review.model': toolApprovalReviewModel,
 				'chat.compact_token_threshold': Math.max(10000, Number(compactTokenThreshold) || 80000)
 			});
 			toast.success($t('settings.saved'));
@@ -152,28 +146,6 @@
 						{$t('admin.compactTokenThresholdHint')}
 					</p>
 				</div>
-			</div>
-
-			<h3 class="text-xs text-gray-400 dark:text-gray-600 mb-2 mt-5">
-				{$t('admin.toolApproval')}
-			</h3>
-			<div>
-				<div class="flex items-center justify-between gap-3">
-					<span class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
-						{$t('admin.toolApprovalReviewModel')}
-					</span>
-					<div class="shrink-0">
-						<ModelSelector
-							bind:selectedModel={toolApprovalReviewModel}
-							nullable
-							nullLabel={$t('modelSelector.currentModel')}
-							preferAbove={false}
-						/>
-					</div>
-				</div>
-				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
-					{$t('admin.toolApprovalReviewModelHint')}
-				</p>
 			</div>
 		</div>
 

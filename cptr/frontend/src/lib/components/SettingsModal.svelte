@@ -14,6 +14,7 @@
 	import Agents from './Admin/Agents.svelte';
 	import Models from './Admin/Models.svelte';
 	import Chat from './Admin/Chat.svelte';
+	import Tools from './Admin/Tools.svelte';
 	import Git from './Admin/Git.svelte';
 	import Skills from './Admin/Skills.svelte';
 	import Messaging from './Admin/Messaging.svelte';
@@ -40,6 +41,7 @@
 		| 'agents'
 		| 'models'
 		| 'chat'
+		| 'tools'
 		| 'git'
 		| 'skills'
 		| 'messaging'
@@ -71,6 +73,7 @@
 		'agents',
 		'models',
 		'chat',
+		'tools',
 		'git',
 		'messaging',
 		'gateway',
@@ -102,6 +105,7 @@
 		{ id: 'agents', label: $t('admin.agents'), icon: 'terminal' },
 		{ id: 'models', label: $t('admin.models'), icon: 'cube' },
 		{ id: 'chat', label: $t('admin.chat'), icon: 'chat-bubble' },
+		{ id: 'tools', label: $t('admin.tools'), icon: 'terminal' },
 		{ id: 'git', label: $t('admin.git'), icon: 'git-branch' },
 		{ id: 'messaging', label: $t('admin.messaging'), icon: 'chat-bubble' },
 		{ id: 'gateway', label: $t('admin.gateway.tab'), icon: 'gateway' },
@@ -216,6 +220,8 @@
 			<Models />
 		{:else if activeTab === 'chat'}
 			<Chat />
+		{:else if activeTab === 'tools'}
+			<Tools />
 		{:else if activeTab === 'git'}
 			<Git />
 		{:else if activeTab === 'skills'}

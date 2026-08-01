@@ -211,6 +211,27 @@ export const updateModelConfig = (
 		method: 'PUT'
 	});
 
+// ── Tool Approval ───────────────────────────────────────────
+
+export type ToolApprovalPolicy = 'allow' | 'review';
+
+export interface ToolApprovalGroup {
+	id: string;
+	tools: {
+		name: string;
+		default_approval: ToolApprovalPolicy | null;
+	}[];
+}
+
+export interface ToolApprovalResponse {
+	default_approval: ToolApprovalPolicy;
+	overrides: Record<string, ToolApprovalPolicy>;
+	groups: ToolApprovalGroup[];
+}
+
+export const getToolApproval = async (): Promise<ToolApprovalResponse> =>
+	fetchJSON<ToolApprovalResponse>('/api/admin/tools/approval');
+
 // ── Tool Servers ────────────────────────────────────────────
 
 export interface ToolServer {
