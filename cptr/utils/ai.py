@@ -779,6 +779,12 @@ async def stream_openai_completions(
                                 emitted = True
                                 yield {"type": "output", "item": item}
                             raw = chunk["usage"]
+                            usage_tokens = sum(
+                                raw.get(key, 0)
+                                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                            )
+                            if not emitted and usage_tokens <= 0:
+                                continue
                             emitted = True
                             yield {
                                 "type": "usage",
@@ -792,6 +798,11 @@ async def stream_openai_completions(
                     if item is not None:
                         emitted = True
                         yield {"type": "output", "item": item}
+                    if not emitted:
+                        raise RuntimeError(
+                            "Upstream provider returned an empty completion with no text, "
+                            "output items, tool calls, or usage tokens."
+                        )
                     emitted = True
                     yield {"type": "done"}
             return
