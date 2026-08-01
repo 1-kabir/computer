@@ -910,23 +910,11 @@ async def compact_chat(chat_id: str, body: CompactRequest, request: Request):
         usage = await _get_chat_context_usage(chat, model_id)
         return {"ok": True, "compacted": False, "reason": "too_short", "context_usage": usage}
 
-    connection = target.connection
-    runtime_model = target.runtime_model
-    provider = connection["provider"]
-    api_key = decrypt_key(connection.get("api_key", ""), _get_jwt_secret())
-    from cptr.utils.chat_task import _default_base_url
-
-    base_url = connection.get("base_url") or _default_base_url(provider)
-    api_type = connection.get("api_type", "chat_completions")
-
     summary = await summarize_messages(
         compacted_messages,
         existing_summary,
-        provider,
-        base_url,
-        api_key,
-        runtime_model,
-        api_type=api_type,
+        target.connection,
+        target.runtime_model,
     )
     checkpoint_message_id = _summary_checkpoint_message_id(keep_zone, message_id)
     await ChatMessage.update(checkpoint_message_id, chat_summary=summary)

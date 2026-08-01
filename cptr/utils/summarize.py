@@ -27,9 +27,7 @@ def _get_summarize_prompt() -> str:
         from cptr.utils.config import load_config
 
         config = load_config()
-        return config.get("chat", {}).get(
-            "compact_summary_prompt", DEFAULT_SUMMARIZE_PROMPT
-        )
+        return config.get("chat", {}).get("compact_summary_prompt", DEFAULT_SUMMARIZE_PROMPT)
     except Exception:
         return DEFAULT_SUMMARIZE_PROMPT
 
@@ -37,19 +35,14 @@ def _get_summarize_prompt() -> str:
 async def summarize_messages(
     messages: list[dict],
     existing_summary: str | None,
-    provider: str,
-    base_url: str,
-    api_key: str,
+    connection: dict,
     model: str,
-    api_type: str = "chat_completions",
 ) -> str:
     """Summarize messages into a compact rolling summary.
 
     If existing_summary is provided, it's included so the new summary
     incorporates everything before it.
     """
-    from cptr.utils.ai import chat_completion
-
     parts: list[str] = []
     if existing_summary:
         parts.append(f"[Previous summary]\n{existing_summary}\n")
@@ -58,9 +51,7 @@ async def summarize_messages(
         role = m.get("role", "unknown")
         content = m.get("content", "")
         if isinstance(content, list):
-            content = " ".join(
-                b.get("text", "") for b in content if b.get("type") == "text"
-            )
+            content = " ".join(b.get("text", "") for b in content if b.get("type") == "text")
         # Truncate very long messages (e.g. tool outputs)
         if len(content) > 2000:
             content = content[:1000] + "\n...(truncated)...\n" + content[-500:]
@@ -72,16 +63,19 @@ async def summarize_messages(
         text = text[:15_000] + "\n...\n" + text[-10_000:]
 
     try:
-        result = await chat_completion(
-            provider=provider,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
+        from cptr.models import Config
+        from cptr.utils.ai import generate_text
+
+        result = await generate_text(
+            model_id=await Config.get("chat.context_compaction.model"),
+            active_connection=connection,
+            active_model=model,
             messages=[{"role": "user", "content": text}],
             system=_get_summarize_prompt(),
             max_tokens=1000,
-            api_type=api_type,
         )
+        if result is None:
+            raise RuntimeError("summary generation failed")
         logger.info("[summarize] LLM summary: %d chars", len(result))
         return result
     except Exception:

@@ -5,12 +5,14 @@
 	import { t } from '$lib/i18n';
 	import ToggleSwitch from '$lib/components/common/ToggleSwitch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import ModelSelector from '$lib/components/common/ModelSelector.svelte';
 
 	let loading = $state(true);
 	let saving = $state(false);
 	let enabled = $state(true);
 	let toolEnabled = $state(true);
 	let backgroundReview = $state(true);
+	let backgroundReviewModel = $state<string | null>(null);
 	let reviewInterval = $state(10);
 
 	onMount(async () => {
@@ -22,6 +24,10 @@
 			backgroundReview =
 				config['skills.background_review_enabled'] !== false &&
 				config['skills.background_review_enabled'] !== 'false';
+			backgroundReviewModel =
+				typeof config['skills.background_review.model'] === 'string'
+					? config['skills.background_review.model']
+					: null;
 			reviewInterval = Number(config['skills.review_interval_turns']) || 10;
 		} catch {
 			toast.error($t('admin.failedToLoadConfig'));
@@ -36,6 +42,7 @@
 				'skills.enabled': enabled,
 				'skills.tool_enabled': toolEnabled,
 				'skills.background_review_enabled': backgroundReview,
+				'skills.background_review.model': backgroundReviewModel,
 				'skills.review_interval_turns': Math.max(1, Number(reviewInterval) || 10)
 			});
 			toast.success($t('settings.saved'));
@@ -94,6 +101,25 @@
 							}}
 						/>
 					</label>
+
+					<div class="flex items-center justify-between gap-3">
+						<div class="min-w-0">
+							<div class="text-xs text-gray-600 dark:text-gray-400">
+								{$t('admin.skillsBackgroundReviewModel')}
+							</div>
+							<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
+								{$t('admin.skillsBackgroundReviewModelHint')}
+							</div>
+						</div>
+						<div class="shrink-0">
+							<ModelSelector
+								bind:selectedModel={backgroundReviewModel}
+								nullable
+								nullLabel={$t('modelSelector.currentModel')}
+								preferAbove={false}
+							/>
+						</div>
+					</div>
 				{/if}
 			</div>
 

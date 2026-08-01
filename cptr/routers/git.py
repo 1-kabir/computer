@@ -11,6 +11,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from cptr.utils.ai import generate_text
 from cptr.utils.json_parser import extract_json
 from cptr.utils.git import (
     GitError,
@@ -274,34 +275,24 @@ async def generate_commit_message(body: CommitMessageRequest, request: Request):
     if not patch:
         raise HTTPException(status_code=400, detail="No staged changes")
 
-    from cptr.utils.ai import chat_completion
-    from cptr.utils.chat_task import _default_base_url
-    from cptr.utils.config import _get_jwt_secret
-    from cptr.utils.crypto import decrypt_key
-    from cptr.utils.model_targets import ApiModelTarget, resolve_model_target
     from cptr.models import Config
 
-    model_id = (body.model_id or await Config.get("chat.default_model") or "").strip()
-    if not model_id:
-        raise HTTPException(status_code=400, detail="No default chat model configured")
-    target = await resolve_model_target(model_id, request.app.state)
-    if not isinstance(target, ApiModelTarget):
-        raise HTTPException(status_code=400, detail="Commit messages require an API model")
-    connection = target.connection
-    base_url = (connection.get("base_url") or _default_base_url(connection["provider"])).rstrip("/")
-    try:
-        text = await chat_completion(
-            provider=connection["provider"],
-            base_url=base_url,
-            api_key=decrypt_key(connection.get("api_key", ""), _get_jwt_secret()),
-            model=target.runtime_model,
-            messages=[{"role": "user", "content": patch}],
-            system=COMMIT_MESSAGE_PROMPT,
-            max_tokens=180,
-            api_type=connection.get("api_type", "chat_completions"),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail="Could not generate a commit message") from e
+    message_model = body.model_id.strip() if isinstance(body.model_id, str) else None
+    if message_model is None:
+        configured_model = await Config.get("git.commit_message_generation.model")
+        message_model = configured_model.strip() if isinstance(configured_model, str) else None
+    if not message_model:
+        default_model = await Config.get("chat.default_model")
+        message_model = default_model.strip() if isinstance(default_model, str) else None
+    text = await generate_text(
+        request,
+        model_id=message_model,
+        messages=[{"role": "user", "content": patch}],
+        system=COMMIT_MESSAGE_PROMPT,
+        max_tokens=180,
+    )
+    if text is None:
+        raise HTTPException(status_code=502, detail="Could not generate a commit message")
     summary, description = _parse_commit_message_response(text)
     if not summary:
         raise HTTPException(status_code=502, detail="Could not generate a commit message")

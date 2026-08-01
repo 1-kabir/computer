@@ -3,6 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import ToggleSwitch from '$lib/components/common/ToggleSwitch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import ModelSelector from '$lib/components/common/ModelSelector.svelte';
 	import { t } from '$lib/i18n';
 	import { currentWorkspace } from '$lib/stores';
 	import {
@@ -101,6 +102,27 @@
 							onchange={(v) => (settings = { ...settings!, background_review_enabled: v })}
 						/>
 					</label>
+
+					<div class="flex items-center justify-between gap-3">
+						<div class="min-w-0">
+							<div class="text-xs text-gray-600 dark:text-gray-400">
+								{$t('memory.backgroundReviewModel')}
+							</div>
+							<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600">
+								{$t('memory.backgroundReviewModelHint')}
+							</div>
+						</div>
+						<div class="shrink-0">
+							<ModelSelector
+								selectedModel={settings['background_review.model'] ?? null}
+								nullable
+								nullLabel={$t('modelSelector.currentModel')}
+								preferAbove={false}
+								onchange={(model) =>
+									(settings = { ...settings!, 'background_review.model': model })}
+							/>
+						</div>
+					</div>
 				{/if}
 			</div>
 
