@@ -727,9 +727,10 @@ TITLE_PROMPT = (
 TOOL_APPROVAL_REVIEW_PROMPT = (
     "Decide whether Computer may run the proposed tool call without asking the user. "
     'Return ONLY JSON: {"decision":"approve" or "deny","reason":"short reason"}. '
-    "Approve only when the call is a reasonable next step for the user's request and the "
-    "arguments do not appear destructive, surprising, credential-seeking, or unrelated. "
-    "Deny when uncertain."
+    "Approve when the call is a reasonable next step for the user's request and the arguments "
+    "are not destructive, surprising, credential-seeking, or unrelated. Approve harmless "
+    "read-only shell commands such as checking the current time/date, current directory, file "
+    "listings, or git status when they directly answer the request. Deny when uncertain."
 )
 
 
@@ -751,8 +752,16 @@ async def review_tool_approval(
     args_text = json.dumps(arguments, ensure_ascii=False, default=str)
     if len(args_text) > 4000:
         args_text = args_text[:3500] + "\n...(truncated)"
+    configured_model = await Config.get("tool_approval.review.model")
+    logger.info(
+        "[tool-approval] auto review start tool=%s active_model=%s review_model=%s args=%s",
+        tool_name,
+        model,
+        configured_model or "<current>",
+        args_text[:1000],
+    )
     parsed = await generate_json(
-        model_id=await Config.get("tool_approval.review.model"),
+        model_id=configured_model,
         active_connection=connection,
         active_model=model,
         messages=[
@@ -767,10 +776,20 @@ async def review_tool_approval(
         ],
         system=TOOL_APPROVAL_REVIEW_PROMPT,
         max_tokens=150,
-        request_params={"temperature": 0},
         timeout_seconds=20,
     )
-    return str((parsed or {}).get("decision") or "").strip().lower() == "approve"
+    decision = str((parsed or {}).get("decision") or "").strip().lower()
+    reason = str((parsed or {}).get("reason") or "").strip()
+    approved = decision == "approve"
+    logger.info(
+        "[tool-approval] auto review decision tool=%s decision=%s approved=%s reason=%s raw=%s",
+        tool_name,
+        decision or "<invalid>",
+        approved,
+        reason[:500],
+        parsed,
+    )
+    return approved
 
 
 async def generate_chat_title(
