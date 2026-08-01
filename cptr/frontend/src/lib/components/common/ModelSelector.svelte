@@ -5,15 +5,19 @@
 	import { t } from '$lib/i18n';
 
 	interface Props {
-		selectedModel: string;
+		selectedModel: string | null;
 		preferAbove?: boolean;
 		align?: 'start' | 'end';
-		onchange?: (model: string) => void;
+		nullable?: boolean;
+		nullLabel?: string;
+		onchange?: (model: string | null) => void;
 	}
 	let {
 		selectedModel = $bindable(),
 		preferAbove = true,
 		align = 'end',
+		nullable = false,
+		nullLabel = 'Current model',
 		onchange
 	}: Props = $props();
 
@@ -31,8 +35,22 @@
 			: $chatModels
 	);
 
-	const menuItems = $derived(
-		filtered.map((m) => ({
+	const menuItems = $derived([
+		...(nullable
+			? [
+					{
+						label: nullLabel,
+						tooltip: nullLabel,
+						active: selectedModel === null || selectedModel === '',
+						check: true,
+						onclick: () => {
+							selectedModel = null;
+							onchange?.(null);
+						}
+					}
+				]
+			: []),
+		...filtered.map((m) => ({
 			label: m.name,
 			tooltip: m.name,
 			active: m.id === selectedModel,
@@ -42,7 +60,7 @@
 				onchange?.(m.id);
 			}
 		}))
-	);
+	]);
 
 	function updateViewportSize() {
 		isSmallViewport = (window.visualViewport?.width ?? window.innerWidth) < 640;
@@ -59,7 +77,7 @@
 	});
 
 	async function toggle() {
-		if ($chatModels.length === 0) return;
+		if ($chatModels.length === 0 && !nullable) return;
 		if (open) {
 			open = false;
 			return;
@@ -80,12 +98,14 @@
 		onclick={toggle}
 	>
 		<span class="truncate max-w-[10rem]"
-			>{$chatModels.length === 0
-				? $t('modelSelector.noModels')
-				: $chatModels.find((m) => m.id === selectedModel)?.name ||
-					$t('modelSelector.selectModel')}</span
+			>{selectedModel === null || selectedModel === ''
+				? nullLabel
+				: $chatModels.length === 0
+					? $t('modelSelector.noModels')
+					: $chatModels.find((m) => m.id === selectedModel)?.name ||
+						$t('modelSelector.selectModel')}</span
 		>
-		{#if $chatModels.length > 0}
+		{#if $chatModels.length > 0 || nullable}
 			<svg
 				class="w-3 h-3 opacity-50"
 				viewBox="0 0 24 24"
@@ -100,7 +120,7 @@
 		{/if}
 	</button>
 
-	{#if open && btnEl && $chatModels.length > 0}
+	{#if open && btnEl && ($chatModels.length > 0 || nullable)}
 		<DropdownMenu
 			items={menuItems}
 			anchor={btnEl}

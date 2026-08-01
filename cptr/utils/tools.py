@@ -1429,6 +1429,7 @@ def _resolve_path(path: str, workspace: str) -> Path:
         raise ValueError(f"Path traversal rejected: {path}")
     return full
 
+
 async def create_automation(
     name: str,
     prompt: str,
@@ -1709,11 +1710,7 @@ async def view_skill(
                 content = target.read_text(errors="strict")
             except (UnicodeDecodeError, ValueError):
                 return f"Error: binary skill file ({target.suffix}), cannot read as text"
-            return (
-                f'<skill_file name="{skill.name}" path="{file_path}">\n'
-                f"{content}\n"
-                "</skill_file>"
-            )
+            return f'<skill_file name="{skill.name}" path="{file_path}">\n{content}\n</skill_file>'
 
         return await asyncio.to_thread(_read_skill_file)
 
@@ -2281,44 +2278,44 @@ async def notify(message: str, target: str = "", title: str = "", *, __context__
 # ── Registry ────────────────────────────────────────────────
 
 TOOLS: dict[str, dict] = {
-    # Read-only (auto-approve)
-    "read_file": {"fn": read_file, "auto": True},
-    "list_directory": {"fn": list_directory, "auto": True},
-    "search_files": {"fn": search_files, "auto": True},
-    "check_task": {"fn": check_task, "auto": True},
-    "web_search": {"fn": web_search, "auto": True},
-    "read_url": {"fn": read_url, "auto": True},
-    "search_chats": {"fn": search_chats, "auto": True},
-    "list_automations": {"fn": list_automations, "auto": True},
-    "view_skill": {"fn": view_skill, "auto": True},
-    "update_tasks": {"fn": update_tasks, "auto": True},
-    # Write / mutate (require approval unless auto_approve_all)
-    "create_file": {"fn": create_file, "auto": False},
-    "display_file": {"fn": display_file, "auto": False},
-    "edit_file": {"fn": edit_file, "auto": False},
-    "multi_edit_file": {"fn": multi_edit_file, "auto": False},
-    "write_file": {"fn": write_file, "auto": False},
-    "run_command": {"fn": run_command, "auto": False},
-    "send_input": {"fn": send_input, "auto": False},
-    "kill_task": {"fn": kill_task, "auto": False},
-    "create_automation": {"fn": create_automation, "auto": False},
-    "update_automation": {"fn": update_automation, "auto": False},
-    "toggle_automation": {"fn": toggle_automation, "auto": False},
-    "delete_automation": {"fn": delete_automation, "auto": False},
-    "notify": {"fn": notify, "auto": False},
-    "image_generate": {"fn": image_generate, "auto": False},
-    "manage_skill": {"fn": manage_skill, "auto": False},
-    "update_memory": {"fn": update_memory, "auto": True},
+    # Auto mode runs these without asking.
+    "read_file": {"fn": read_file, "ask": False},
+    "list_directory": {"fn": list_directory, "ask": False},
+    "search_files": {"fn": search_files, "ask": False},
+    "check_task": {"fn": check_task, "ask": False},
+    "web_search": {"fn": web_search, "ask": False},
+    "read_url": {"fn": read_url, "ask": False},
+    "search_chats": {"fn": search_chats, "ask": False},
+    "list_automations": {"fn": list_automations, "ask": False},
+    "view_skill": {"fn": view_skill, "ask": False},
+    "update_tasks": {"fn": update_tasks, "ask": False},
+    # Auto mode reviews these first, then asks if denied or unclear.
+    "create_file": {"fn": create_file, "ask": True},
+    "display_file": {"fn": display_file, "ask": True},
+    "edit_file": {"fn": edit_file, "ask": True},
+    "multi_edit_file": {"fn": multi_edit_file, "ask": True},
+    "write_file": {"fn": write_file, "ask": True},
+    "run_command": {"fn": run_command, "ask": True},
+    "send_input": {"fn": send_input, "ask": True},
+    "kill_task": {"fn": kill_task, "ask": True},
+    "create_automation": {"fn": create_automation, "ask": True},
+    "update_automation": {"fn": update_automation, "ask": True},
+    "toggle_automation": {"fn": toggle_automation, "ask": True},
+    "delete_automation": {"fn": delete_automation, "ask": True},
+    "notify": {"fn": notify, "ask": True},
+    "image_generate": {"fn": image_generate, "ask": True},
+    "manage_skill": {"fn": manage_skill, "ask": True},
+    "update_memory": {"fn": update_memory, "ask": False},
 }
 
 # Browser tools — conditionally included in schemas based on browser.enabled
 BROWSER_TOOLS: dict[str, dict] = {
-    "browser_navigate": {"fn": browser_navigate, "auto": False},
-    "browser_snapshot": {"fn": browser_snapshot, "auto": True},
-    "browser_click": {"fn": browser_click, "auto": False},
-    "browser_type": {"fn": browser_type, "auto": False},
-    "browser_screenshot": {"fn": browser_screenshot, "auto": True},
-    "browser_evaluate": {"fn": browser_evaluate, "auto": False},
+    "browser_navigate": {"fn": browser_navigate, "ask": True},
+    "browser_snapshot": {"fn": browser_snapshot, "ask": False},
+    "browser_click": {"fn": browser_click, "ask": True},
+    "browser_type": {"fn": browser_type, "ask": True},
+    "browser_screenshot": {"fn": browser_screenshot, "ask": False},
+    "browser_evaluate": {"fn": browser_evaluate, "ask": True},
 }
 
 
@@ -2671,12 +2668,13 @@ async def _run_subagent_chat(
 
 
 SUBAGENT_TOOLS: dict[str, dict] = {
-    "delegate_task": {"fn": delegate_task, "auto": True},
-    "timer": {"fn": timer, "auto": False},
+    "delegate_task": {"fn": delegate_task, "ask": False},
+    "timer": {"fn": timer, "ask": True},
 }
 
 # Combined lookup for execution and approval (always available regardless of config)
 ALL_TOOLS: dict[str, dict] = {**TOOLS, **BROWSER_TOOLS, **SUBAGENT_TOOLS}
+
 
 BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
     "files": (

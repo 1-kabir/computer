@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.20] - 2026-08-01
+
+### Added
+
+- 💬 **Chat settings have their own Admin page.** Admins can now turn chat title generation on or off, choose the models used for titles, summaries, and approval reviews, and adjust when long chats are compacted.
+- 🗂️ **Git settings have their own Admin page.** Admins can now choose which model drafts commit messages.
+- 🧠 **Memory and skills reviews can use a chosen model.** Background reviews can now use a specific model, or keep following the current chat model when left unset.
+
+### Changed
+
+- 🧭 **Model choices are clearer for helper features.** Model pickers now show when a feature is using the current or default model instead of forcing a saved choice.
+- ⚙️ **Admin settings are easier to scan.** Chat and Git options moved out of Models into dedicated pages, leaving model setup focused on model setup.
+
+### Fixed
+
+- 🤖 **Auto mode asks at smarter moments.** Computer can now approve safe, expected tool use in Auto mode and still asks when an action looks risky or unclear.
+
 ## [0.9.19] - 2026-07-31
 
 ### Changed

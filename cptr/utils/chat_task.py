@@ -42,7 +42,7 @@ from cptr.models import (
 from cptr.socket.main import emit_to_user
 from cptr.utils.ai import (
     ChatCompletionForm,
-    chat_completion,
+    generate_json,
     stream_anthropic,
     stream_openai_completions,
     stream_openai_responses,
@@ -59,7 +59,6 @@ from cptr.utils.tools import (
     _fn_to_schema,
 )
 from cptr.utils.chat_export import export_chat_to_file
-from cptr.utils.json_parser import extract_json
 from cptr.utils.prompt_templates import load_system_prompt as _load_system_prompt
 from cptr.utils.agents.events import (
     AgentDone,
@@ -725,6 +724,73 @@ TITLE_PROMPT = (
     "Do not include quotes around the JSON. Do not explain."
 )
 
+TOOL_APPROVAL_REVIEW_PROMPT = (
+    "Decide whether Computer may run the proposed tool call without asking the user. "
+    'Return ONLY JSON: {"decision":"approve" or "deny","reason":"short reason"}. '
+    "Approve when the call is a reasonable next step for the user's request and the arguments "
+    "are not destructive, surprising, credential-seeking, or unrelated. Approve harmless "
+    "read-only shell commands such as checking the current time/date, current directory, file "
+    "listings, or git status when they directly answer the request. Deny when uncertain."
+)
+
+
+async def review_tool_approval(
+    *,
+    messages: list[dict],
+    assistant_text: str,
+    connection: dict,
+    model: str,
+    tool_name: str,
+    arguments: dict,
+) -> bool:
+    """Return True when Auto mode can run a pending tool without prompting."""
+    latest_user = ""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            latest_user = _plain_message_text(message.get("content"))
+            break
+    args_text = json.dumps(arguments, ensure_ascii=False, default=str)
+    if len(args_text) > 4000:
+        args_text = args_text[:3500] + "\n...(truncated)"
+    configured_model = await Config.get("tool_approval.review.model")
+    logger.info(
+        "[tool-approval] auto review start tool=%s active_model=%s review_model=%s args=%s",
+        tool_name,
+        model,
+        configured_model or "<current>",
+        args_text[:1000],
+    )
+    parsed = await generate_json(
+        model_id=configured_model,
+        active_connection=connection,
+        active_model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Latest user request:\n{latest_user[:2000]}\n\n"
+                    f"Assistant text before tool call:\n{assistant_text[-2000:]}\n\n"
+                    f"Tool: {tool_name}\nArguments:\n{args_text}"
+                ),
+            }
+        ],
+        system=TOOL_APPROVAL_REVIEW_PROMPT,
+        max_tokens=150,
+        timeout_seconds=20,
+    )
+    decision = str((parsed or {}).get("decision") or "").strip().lower()
+    reason = str((parsed or {}).get("reason") or "").strip()
+    approved = decision == "approve"
+    logger.info(
+        "[tool-approval] auto review decision tool=%s decision=%s approved=%s reason=%s raw=%s",
+        tool_name,
+        decision or "<invalid>",
+        approved,
+        reason[:500],
+        parsed,
+    )
+    return approved
+
 
 async def generate_chat_title(
     chat_id: str,
@@ -735,14 +801,13 @@ async def generate_chat_title(
 ):
     """Generate a proper title for a new chat via a lightweight LLM call.
 
-    Uses the shared chat_completion() helper from ai.py.
+    Uses the configured title model, inheriting the active/default model when unset.
     On success, updates the DB and emits a socket event so the frontend
     updates the tab label in real time.
     """
-    provider = connection["provider"]
-    api_key = decrypt_key(connection.get("api_key", ""), _get_jwt_secret())
-    base_url = connection.get("base_url") or _default_base_url(provider)
-    api_type = connection.get("api_type", "chat_completions")
+    title_generation_enabled = await Config.get("chat.title_generation.enabled")
+    if title_generation_enabled is False or title_generation_enabled == "false":
+        return
 
     # Truncate very long messages to keep the prompt small
     truncated = user_message[:200].strip()
@@ -750,19 +815,14 @@ async def generate_chat_title(
         truncated += "..."
 
     try:
-        text = await chat_completion(
-            provider=provider,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
+        parsed = await generate_json(
+            model_id=await Config.get("chat.title_generation.model"),
+            active_connection=connection,
+            active_model=model,
             messages=[{"role": "user", "content": truncated}],
             system=TITLE_PROMPT,
             max_tokens=50,
-            api_type=api_type,
         )
-
-        # Parse the JSON title
-        parsed = extract_json(text)
         title = (parsed.get("title", "") if isinstance(parsed, dict) else "").strip()
         if not title:
             return
@@ -1865,7 +1925,7 @@ async def run_chat_task(
         # Plan mode: strip write tools, inject prompt as user message (not system, to preserve cache)
         plan_mode = chat_params.get("plan_mode", False)
         if plan_mode:
-            tools = [t for t in tools if ALL_TOOLS.get(t["name"], {}).get("auto")]
+            tools = [t for t in tools if not ALL_TOOLS.get(t["name"], {}).get("ask", True)]
             tools = [t for t in tools if t["name"] not in {"delegate_task", "update_memory"}]
             tools.append(_fn_to_schema("create_artifact", create_artifact))
             tools.append(ASK_USER_SCHEMA)
@@ -1893,7 +1953,7 @@ async def run_chat_task(
 
         # Tool approval mode: 'ask' | 'auto' | 'full'
         #   ask  = require approval for ALL tools (including reads)
-        #   auto = auto-approve tools marked auto=True, ask for others
+        #   auto = run ask:false tools; review ask:true tools before prompting
         #   full = auto-approve everything
         approval_mode = chat_params.get("tool_approval_mode", "auto")
         # Legacy compat: old boolean auto_approve_tools
@@ -1924,9 +1984,26 @@ async def run_chat_task(
 
                 name = item.get("name", "")
                 tool = ALL_TOOLS.get(name)
-                needs_approval = not (
-                    approval_mode == "full" or (approval_mode == "auto" and tool and tool["auto"])
+                should_auto = approval_mode == "full" or (
+                    approval_mode == "auto" and tool and not tool.get("ask", True)
                 )
+                if (
+                    not should_auto
+                    and approval_mode == "auto"
+                    and not item.get("approved")
+                    and tool
+                    and await review_tool_approval(
+                        messages=messages,
+                        assistant_text=content,
+                        connection=connection,
+                        model=model,
+                        tool_name=name,
+                        arguments=item.get("arguments") or {},
+                    )
+                ):
+                    item["approved"] = True
+                    should_auto = True
+                needs_approval = not should_auto
                 if needs_approval and not item.get("approved"):
                     item["status"] = "pending"
                     await _save_message(
@@ -2056,11 +2133,8 @@ async def run_chat_task(
                 summary = await summarize_messages(
                     drop_zone,
                     loaded_summary,
-                    provider,
-                    base_url,
-                    api_key,
+                    connection,
                     model,
-                    api_type=api_type,
                 )
 
                 checkpoint_message_id = _summary_checkpoint_message_id(
@@ -2419,7 +2493,7 @@ async def run_chat_task(
                             loaded_skill_names.add(skill_name)
                     tool = ALL_TOOLS.get(name)
                     should_auto = approval_mode == "full" or (
-                        approval_mode == "auto" and tool and tool["auto"]
+                        approval_mode == "auto" and tool and not tool.get("ask", True)
                     )
                     if not should_auto:
                         needs_approval = tc
@@ -2747,7 +2821,11 @@ async def run_chat_task(
                     fallback = first_user.content[:50].strip() or "New Chat"
                     if chat_obj.title == fallback:
                         await generate_chat_title(
-                            chat_id, user_id, connection, model, first_user.content
+                            chat_id,
+                            user_id,
+                            connection,
+                            model,
+                            first_user.content,
                         )
         except Exception:
             logger.debug(

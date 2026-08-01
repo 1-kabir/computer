@@ -13,6 +13,8 @@
 	import Connections from './Admin/Connections.svelte';
 	import Agents from './Admin/Agents.svelte';
 	import Models from './Admin/Models.svelte';
+	import Chat from './Admin/Chat.svelte';
+	import Git from './Admin/Git.svelte';
 	import Skills from './Admin/Skills.svelte';
 	import Messaging from './Admin/Messaging.svelte';
 	import Gateway from './Admin/Gateway.svelte';
@@ -37,6 +39,8 @@
 		| 'connections'
 		| 'agents'
 		| 'models'
+		| 'chat'
+		| 'git'
 		| 'skills'
 		| 'messaging'
 		| 'gateway'
@@ -66,6 +70,8 @@
 		'connections',
 		'agents',
 		'models',
+		'chat',
+		'git',
 		'messaging',
 		'gateway',
 		'audio',
@@ -95,6 +101,8 @@
 		{ id: 'connections', label: $t('admin.connections'), icon: 'plug' },
 		{ id: 'agents', label: $t('admin.agents'), icon: 'terminal' },
 		{ id: 'models', label: $t('admin.models'), icon: 'cube' },
+		{ id: 'chat', label: $t('admin.chat'), icon: 'chat-bubble' },
+		{ id: 'git', label: $t('admin.git'), icon: 'git-branch' },
 		{ id: 'messaging', label: $t('admin.messaging'), icon: 'chat-bubble' },
 		{ id: 'gateway', label: $t('admin.gateway.tab'), icon: 'gateway' },
 		{ id: 'audio', label: $t('admin.audio.title'), icon: 'microphone' },
@@ -206,6 +214,10 @@
 			<Agents />
 		{:else if activeTab === 'models'}
 			<Models />
+		{:else if activeTab === 'chat'}
+			<Chat />
+		{:else if activeTab === 'git'}
+			<Git />
 		{:else if activeTab === 'skills'}
 			<Skills />
 		{:else if activeTab === 'messaging'}

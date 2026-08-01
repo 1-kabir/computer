@@ -3,8 +3,9 @@
 Each streaming function takes a ChatCompletionForm + url + key.
 All yield normalized events: text_delta, output, tool_call, usage, done.
 
-chat_completion() provides a simple non-streaming call for lightweight tasks
-(title generation, summarization, etc.).
+chat_completion() is the low-level non-streaming provider call.
+generate_text()/generate_json() add model-id resolution and inheritance for
+small internal calls.
 """
 
 from __future__ import annotations
@@ -223,6 +224,109 @@ async def chat_completion(
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
+async def generate_text(
+    request=None,
+    *,
+    model_id: str | None,
+    messages: list[dict],
+    system: str = "",
+    max_tokens: int = 100,
+    active_connection: dict | None = None,
+    active_model: str = "",
+    request_params: dict | None = None,
+    timeout_seconds: float = 20,
+) -> str | None:
+    """Generate text; model_id None inherits active/default."""
+    from cptr.models import Config
+    from cptr.utils.config import _get_jwt_secret
+    from cptr.utils.crypto import decrypt_key
+    from cptr.utils.model_targets import first_api_model_target, resolve_api_model_target
+
+    app_state = getattr(getattr(request, "app", None), "state", None)
+    connection = active_connection
+    runtime_model = active_model
+    selected = model_id.strip() if isinstance(model_id, str) else ""
+    if selected:
+        try:
+            target = await resolve_api_model_target(selected, app_state)
+            connection = target.connection
+            runtime_model = target.runtime_model
+        except Exception:
+            logger.debug("[generate_text] model not available: %s", selected, exc_info=True)
+
+    if not connection or not runtime_model:
+        default_model = await Config.get("chat.default_model")
+        target = None
+        if isinstance(default_model, str) and default_model.strip():
+            try:
+                target = await resolve_api_model_target(default_model.strip(), app_state)
+            except Exception:
+                logger.debug("[generate_text] default model not available", exc_info=True)
+        if target is None:
+            try:
+                target = await first_api_model_target(app_state)
+            except Exception:
+                logger.debug("[generate_text] no fallback API model available", exc_info=True)
+                return None
+        connection = target.connection
+        runtime_model = target.runtime_model
+
+    provider = connection["provider"]
+    base_url = connection.get("base_url") or {
+        "anthropic": "https://api.anthropic.com/v1",
+        "openai": "https://api.openai.com/v1",
+    }.get(provider, "https://api.openai.com/v1")
+    try:
+        return await asyncio.wait_for(
+            chat_completion(
+                provider=provider,
+                base_url=base_url,
+                api_key=decrypt_key(connection.get("api_key", ""), _get_jwt_secret()),
+                model=runtime_model,
+                messages=messages,
+                system=system,
+                max_tokens=max_tokens,
+                api_type=connection.get("api_type", "chat_completions"),
+                request_params=request_params,
+            ),
+            timeout=timeout_seconds,
+        )
+    except Exception:
+        logger.debug("[generate_text] generation failed", exc_info=True)
+        return None
+
+
+async def generate_json(
+    request=None,
+    *,
+    model_id: str | None,
+    messages: list[dict],
+    system: str = "",
+    max_tokens: int = 100,
+    active_connection: dict | None = None,
+    active_model: str = "",
+    request_params: dict | None = None,
+    timeout_seconds: float = 20,
+) -> dict | None:
+    from cptr.utils.json_parser import extract_json
+
+    text = await generate_text(
+        request,
+        model_id=model_id,
+        messages=messages,
+        system=system,
+        max_tokens=max_tokens,
+        active_connection=active_connection,
+        active_model=active_model,
+        request_params=request_params,
+        timeout_seconds=timeout_seconds,
+    )
+    if not text:
+        return None
+    parsed = extract_json(text)
+    return parsed if isinstance(parsed, dict) else None
+
+
 # ── Anthropic ────────────────────────────────────────────────
 
 
@@ -409,7 +513,11 @@ async def stream_anthropic(
                             yield {"type": "done"}
             return
         except _STREAM_RETRY_ERRORS as exc:
-            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1 or not _is_retryable_stream_error(exc):
+            if (
+                emitted
+                or attempt == _STREAM_RETRY_ATTEMPTS - 1
+                or not _is_retryable_stream_error(exc)
+            ):
                 raise
             logger.warning(
                 "[stream] anthropic transient stream failure before first event; retrying (%s/%s)",
@@ -482,8 +590,7 @@ def _to_openai_messages(
             new_m.pop("reasoning_items", None)
             if new_m.get("tool_calls"):
                 new_m["tool_calls"] = [
-                    {k: v for k, v in tc.items() if k != "fc_id"}
-                    for tc in new_m["tool_calls"]
+                    {k: v for k, v in tc.items() if k != "fc_id"} for tc in new_m["tool_calls"]
                 ]
             new_m["content"] = formatted_content
             ri = m.get("reasoning_items")
@@ -689,7 +796,11 @@ async def stream_openai_completions(
                     yield {"type": "done"}
             return
         except _STREAM_RETRY_ERRORS as exc:
-            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1 or not _is_retryable_stream_error(exc):
+            if (
+                emitted
+                or attempt == _STREAM_RETRY_ATTEMPTS - 1
+                or not _is_retryable_stream_error(exc)
+            ):
                 raise
             logger.warning(
                 "[stream] openai completions transient stream failure before first event; retrying (%s/%s)",
@@ -942,7 +1053,9 @@ async def stream_openai_responses(
                         elif etype == "response.reasoning_summary_text.delta":
                             item = get_reasoning_item(event)
                             delta = event.get("delta", "")
-                            summary = item.setdefault("summary", [{"type": "summary_text", "text": ""}])
+                            summary = item.setdefault(
+                                "summary", [{"type": "summary_text", "text": ""}]
+                            )
                             if not summary:
                                 summary.append({"type": "summary_text", "text": ""})
                             if isinstance(summary[0], dict):
@@ -974,10 +1087,9 @@ async def stream_openai_responses(
                                 }
                             elif item["type"] == "reasoning":
                                 # Reasoning items must be round-tripped for reasoning models
-                                if (
-                                    active_reasoning_item is not None
-                                    and active_reasoning_item.get("id") == item.get("id")
-                                ):
+                                if active_reasoning_item is not None and active_reasoning_item.get(
+                                    "id"
+                                ) == item.get("id"):
                                     active_reasoning_item = None
                                 emitted = True
                                 yield {
@@ -991,13 +1103,15 @@ async def stream_openai_responses(
                             raise RuntimeError(f"Responses API error: {msg}")
 
                         elif etype == "response.completed":
-                            if (
-                                active_reasoning_item is not None
-                                and _reasoning_items_to_content([active_reasoning_item])
+                            if active_reasoning_item is not None and _reasoning_items_to_content(
+                                [active_reasoning_item]
                             ):
                                 active_reasoning_item["status"] = "completed"
                                 emitted = True
-                                yield {"type": "output", "item": copy.deepcopy(active_reasoning_item)}
+                                yield {
+                                    "type": "output",
+                                    "item": copy.deepcopy(active_reasoning_item),
+                                }
                             usage = event.get("response", {}).get("usage", {})
                             if usage:
                                 emitted = True
@@ -1006,7 +1120,11 @@ async def stream_openai_responses(
                             yield {"type": "done"}
             return
         except _STREAM_RETRY_ERRORS as exc:
-            if emitted or attempt == _STREAM_RETRY_ATTEMPTS - 1 or not _is_retryable_stream_error(exc):
+            if (
+                emitted
+                or attempt == _STREAM_RETRY_ATTEMPTS - 1
+                or not _is_retryable_stream_error(exc)
+            ):
                 raise
             logger.warning(
                 "[stream] openai responses transient stream failure before first event; retrying (%s/%s)",

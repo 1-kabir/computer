@@ -48,10 +48,6 @@
 	// Default model
 	let defaultModelId = $state('');
 
-	// Context compaction
-	let compactTokenThreshold = $state(80000);
-	let compactDirty = $state(false);
-
 	const TEMPLATE_VARIABLES = [
 		{ name: 'CPTR_CONTEXT', desc: 'Runtime, machine, workspace, and tool context' },
 		{ name: 'RUNTIME_ENV', desc: 'Runtime environment (host or container)' },
@@ -117,7 +113,7 @@ Workspace: {{WORKSPACE_NAME}}
 Files:
 {{FILE_TREE}}`;
 
-	let hasDirty = $derived(globalDirty || compactDirty || models.some((m) => m.dirty));
+	let hasDirty = $derived(globalDirty || models.some((m) => m.dirty));
 
 	function parseRows(config: ModelConfigEntry | undefined): ParamRow[] {
 		const rp = config?.params?.request_params;
@@ -256,10 +252,9 @@ Files:
 	onMount(async () => {
 		await loadModelConfig();
 
-		// Load admin config (default model, context compaction)
+		// Load default model
 		try {
 			const adminCfg = await getAdminConfig();
-			compactTokenThreshold = Number(adminCfg['chat.compact_token_threshold']) || 80000;
 			defaultModelId =
 				typeof adminCfg['chat.default_model'] === 'string' ? adminCfg['chat.default_model'] : '';
 		} catch {}
@@ -349,12 +344,7 @@ Files:
 			globalDirty = false;
 			models.forEach((m) => (m.dirty = false));
 
-			// Save default model
-			await updateConfig({
-				'chat.compact_token_threshold': compactTokenThreshold,
-				'chat.default_model': defaultModelId
-			});
-			compactDirty = false;
+			await updateConfig({ 'chat.default_model': defaultModelId });
 
 			toast.success($t('settings.saved'));
 		} catch {
@@ -552,44 +542,18 @@ Files:
 				</button>
 			</div>
 
-			<!-- Default model -->
-			<h3 class="text-xs text-gray-400 dark:text-gray-600 mb-2">
-				{$t('models.defaultModel')}
-			</h3>
 			<div class="mb-1">
-				<ModelSelector bind:selectedModel={defaultModelId} preferAbove={false} align="start" />
-			</div>
-			<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mb-5">
-				{$t('models.defaultModelHint')}
-			</p>
-
-			<!-- Context compaction -->
-			<h3 class="text-xs text-gray-400 dark:text-gray-600 mb-2">{$t('admin.contextCompaction')}</h3>
-
-			<div class="flex flex-col gap-2.5 mb-5">
-				<div>
-					<label class="text-xs text-gray-600 dark:text-gray-400" for="compact-threshold"
-						>{$t('admin.compactTokenThreshold')}</label
-					>
-					<div class="flex items-center gap-1.5 mt-1">
-						<input
-							id="compact-threshold"
-							type="number"
-							bind:value={compactTokenThreshold}
-							oninput={() => (compactDirty = true)}
-							min="10000"
-							max="1000000"
-							step="10000"
-							class="w-24 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
-						/>
-						<span class="text-[0.6875rem] text-gray-400 dark:text-gray-600"
-							>{$t('admin.compactTokenThresholdUnit')}</span
-						>
+				<div class="flex items-center justify-between gap-3">
+					<h3 class="min-w-0 text-xs text-gray-600 dark:text-gray-400">
+						{$t('models.defaultModel')}
+					</h3>
+					<div class="shrink-0">
+						<ModelSelector bind:selectedModel={defaultModelId} preferAbove={false} />
 					</div>
-					<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mt-0.5">
-						{$t('admin.compactTokenThresholdHint')}
-					</p>
 				</div>
+				<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+					{$t('models.defaultModelHint')}
+				</p>
 			</div>
 
 			<!-- Global defaults -->

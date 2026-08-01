@@ -18,6 +18,7 @@ export type MemorySettings = {
 	enabled: boolean;
 	tool_enabled: boolean;
 	background_review_enabled: boolean;
+	'background_review.model'?: string | null;
 	review_interval_turns: number;
 	user_char_limit: number;
 	workspace_char_limit: number;

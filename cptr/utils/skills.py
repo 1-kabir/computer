@@ -192,11 +192,15 @@ def write_usage(workspace: str, source: str, data: dict[str, Any]) -> None:
     path = _usage_path(workspace, source)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     os.replace(tmp, path)
 
 
-def bump_skill_view(workspace: str, name: str, source: str = "workspace", *, used: bool = True) -> None:
+def bump_skill_view(
+    workspace: str, name: str, source: str = "workspace", *, used: bool = True
+) -> None:
     try:
         data = read_usage(workspace, source)
         skills = data.setdefault("skills", {})
@@ -595,7 +599,11 @@ def update_managed_skill(workspace: str, name: str, content: str) -> dict:
     content = _with_skill_metadata(content, preserve_created=old_fm)
     _validate_skill_content(name, content)
     _write_text_atomic(skill_md, content.strip() + "\n")
-    source = "global" if skill_dir.is_relative_to(MANAGED_GLOBAL_SKILL_DIR.expanduser().resolve()) else "workspace"
+    source = (
+        "global"
+        if skill_dir.is_relative_to(MANAGED_GLOBAL_SKILL_DIR.expanduser().resolve())
+        else "workspace"
+    )
     bump_skill_update(workspace, name, source)
     return {"success": True, "name": name, "location": str(skill_md.resolve())}
 
@@ -635,7 +643,11 @@ def write_managed_skill_file(
     if not target.is_relative_to(skill_dir):
         raise ValueError("file_path escapes the skill")
     _write_text_atomic(target, file_content)
-    source = "global" if skill_dir.is_relative_to(MANAGED_GLOBAL_SKILL_DIR.expanduser().resolve()) else "workspace"
+    source = (
+        "global"
+        if skill_dir.is_relative_to(MANAGED_GLOBAL_SKILL_DIR.expanduser().resolve())
+        else "workspace"
+    )
     bump_skill_update(workspace, name, source)
     return {"success": True, "name": name, "location": str(target)}
 
@@ -787,19 +799,19 @@ async def run_skill_review(
     skill_create_requested: bool,
 ) -> None:
     try:
-        from cptr.utils.ai import chat_completion
-        from cptr.utils.chat_task import _default_base_url
-        from cptr.utils.config import _get_jwt_secret
-        from cptr.utils.crypto import decrypt_key
-        from cptr.utils.json_parser import extract_json
+        from cptr.models import Config
+        from cptr.utils.ai import generate_json
         from cptr.utils.memory import summarize_recent_conversation
 
         skills = discover_skills(workspace)
         transcript = summarize_recent_conversation(conversation_messages, assistant_reply)
-        catalog = "\n".join(
-            f"- {skill.name} ({skill.source}, {'managed' if skill.managed else 'read-only'}): {skill.description}"
-            for skill in skills[:80]
-        ) or "- none"
+        catalog = (
+            "\n".join(
+                f"- {skill.name} ({skill.source}, {'managed' if skill.managed else 'read-only'}): {skill.description}"
+                for skill in skills[:80]
+            )
+            or "- none"
+        )
         loaded_blocks = []
         for name in sorted(loaded_skill_names):
             skill = load_skill(workspace, name)
@@ -830,20 +842,14 @@ async def run_skill_review(
             f"Loaded managed skill contents:\n{loaded_context}\n\n"
             f"Conversation:\n{transcript}"
         )
-        provider = model_connection["provider"]
-        api_key = decrypt_key(model_connection.get("api_key", ""), _get_jwt_secret())
-        base_url = model_connection.get("base_url") or _default_base_url(provider)
-        text = await chat_completion(
-            provider=provider,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
+        parsed = await generate_json(
+            model_id=await Config.get("skills.background_review.model"),
+            active_connection=model_connection,
+            active_model=model,
             messages=[{"role": "user", "content": prompt}],
             system="You are Computer's private skill reviewer. Return only valid JSON.",
             max_tokens=1800,
-            api_type=model_connection.get("api_type", "chat_completions"),
         )
-        parsed = extract_json(text)
         if not isinstance(parsed, dict):
             return
         actions = parsed.get("actions")

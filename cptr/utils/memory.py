@@ -24,6 +24,7 @@ DEFAULT_MEMORY_SETTINGS: dict[str, Any] = {
     "enabled": True,
     "tool_enabled": True,
     "background_review_enabled": True,
+    "background_review.model": None,
     "review_interval_turns": 10,
     "user_char_limit": 2000,
     "workspace_char_limit": 3000,
@@ -279,15 +280,19 @@ def _split_markdown_sections(text: str, fallback_heading: str = "") -> list[dict
             headings.append((index, len(match.group(1)), match.group(2).strip()))
     if not headings:
         content = "\n".join(lines).strip()
-        return [
-            {
-                "heading": fallback_heading,
-                "memory_id": _extract_memory_id(content),
-                "content": content,
-                "start": 0,
-                "end": len(lines),
-            }
-        ] if content else []
+        return (
+            [
+                {
+                    "heading": fallback_heading,
+                    "memory_id": _extract_memory_id(content),
+                    "content": content,
+                    "start": 0,
+                    "end": len(lines),
+                }
+            ]
+            if content
+            else []
+        )
 
     sections: list[dict[str, Any]] = []
     for pos, (start, level, heading) in enumerate(headings):
@@ -720,7 +725,9 @@ def _operation_uses_markdown(operation: dict[str, Any]) -> bool:
     )
 
 
-def _find_section_bounds(text: str, *, memory_id: str = "", heading: str = "") -> tuple[int, int] | None:
+def _find_section_bounds(
+    text: str, *, memory_id: str = "", heading: str = ""
+) -> tuple[int, int] | None:
     sections = _split_markdown_sections(text)
     for section in sections:
         if memory_id and section.get("memory_id") == memory_id:
@@ -751,7 +758,11 @@ def _write_if_unchanged(
     current_hash = _file_hash(path)
     if current_hash != original_hash:
         backup = _backup_to_trash(path, "conflict", root)
-        return False, f"refusing to overwrite changed memory file; backup saved to {backup}", str(backup)
+        return (
+            False,
+            f"refusing to overwrite changed memory file; backup saved to {backup}",
+            str(backup),
+        )
     _atomic_write_text(path, content)
     return True, "written", ""
 
@@ -785,7 +796,9 @@ def _add_related_link(section_text: str, link: str) -> str:
     return section_text.rstrip() + f"\n\nRelated: {rendered}\n"
 
 
-def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any]]) -> dict[str, Any]:
+def apply_markdown_memory_batch(
+    root: MemoryRoot, operations: list[dict[str, Any]]
+) -> dict[str, Any]:
     if not operations:
         return {"success": False, "error": "operations list is empty"}
 
@@ -798,7 +811,10 @@ def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any
 
     def load(path: Path) -> str:
         if path not in touched:
-            touched[path] = (_file_hash(path), path.read_text(errors="replace") if path.exists() else "")
+            touched[path] = (
+                _file_hash(path),
+                path.read_text(errors="replace") if path.exists() else "",
+            )
         return touched[path][1]
 
     def store(path: Path, content: str) -> None:
@@ -849,7 +865,9 @@ def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any
                 start, end = bounds
                 heading = str(operation.get("heading") or operation.get("title") or "Memory")
                 marker = str(operation.get("memory_id") or "").strip()
-                replacement = _append_memory_section("", {**operation, "heading": heading, "memory_id": marker}, heading)
+                replacement = _append_memory_section(
+                    "", {**operation, "heading": heading, "memory_id": marker}, heading
+                )
                 store(target, _replace_lines(existing, start, end, replacement))
             elif old_text and old_text in existing:
                 store(target, existing.replace(old_text, content, 1))
@@ -877,7 +895,9 @@ def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any
             messages.append(f"removed memory from {_relative_to_root(target, root.root)}")
 
         elif action == "link":
-            link = str(operation.get("link") or operation.get("target") or operation.get("content") or "").strip()
+            link = str(
+                operation.get("link") or operation.get("target") or operation.get("content") or ""
+            ).strip()
             if not link:
                 return {"success": False, "error": f"{operation_name}: link is required"}
             target = read_target(operation)
@@ -891,7 +911,10 @@ def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any
                 start, end = bounds
                 lines = existing.splitlines()
                 section_text = "\n".join(lines[start:end])
-                store(target, _replace_lines(existing, start, end, _add_related_link(section_text, link)))
+                store(
+                    target,
+                    _replace_lines(existing, start, end, _add_related_link(section_text, link)),
+                )
             else:
                 store(target, _add_related_link(existing, link))
             messages.append(f"linked memory in {_relative_to_root(target, root.root)}")
@@ -905,14 +928,23 @@ def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any
                 return {"success": False, "error": f"{operation_name}: destination already exists"}
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
-            messages.append(f"moved {_relative_to_root(source, root.root)} to {_relative_to_root(destination, root.root)}")
+            messages.append(
+                f"moved {_relative_to_root(source, root.root)} to {_relative_to_root(destination, root.root)}"
+            )
 
         elif action == "split":
             target = read_target(operation)
             existing = load(target)
-            sections = [section for section in _split_markdown_sections(existing, target.stem) if section.get("content")]
+            sections = [
+                section
+                for section in _split_markdown_sections(existing, target.stem)
+                if section.get("content")
+            ]
             if len(sections) < 2:
-                return {"success": False, "error": f"{operation_name}: file does not have multiple sections"}
+                return {
+                    "success": False,
+                    "error": f"{operation_name}: file does not have multiple sections",
+                }
             folder = target.with_suffix("")
             folder.mkdir(parents=True, exist_ok=True)
             _backup_to_trash(target, "split", root.root)
@@ -925,19 +957,28 @@ def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any
                     _atomic_write_text(child, child_text)
                 map_lines.append(f"- [[{heading}]]")
             store(target, "\n".join(map_lines).rstrip() + "\n")
-            messages.append(f"split {_relative_to_root(target, root.root)} into {len(sections)} files")
+            messages.append(
+                f"split {_relative_to_root(target, root.root)} into {len(sections)} files"
+            )
 
         elif action == "merge":
-            source = _safe_relative_path(root.root, str(operation.get("source_path") or operation.get("path") or ""))
+            source = _safe_relative_path(
+                root.root, str(operation.get("source_path") or operation.get("path") or "")
+            )
             target = _safe_relative_path(root.root, str(operation.get("target_path") or ""))
             if not source.exists() or not target.exists():
-                return {"success": False, "error": f"{operation_name}: source and target must exist"}
+                return {
+                    "success": False,
+                    "error": f"{operation_name}: source and target must exist",
+                }
             source_text = source.read_text(errors="replace")
             target_text = load(target)
             _backup_to_trash(source, "merge", root.root)
             store(target, target_text.rstrip() + "\n\n" + source_text.strip() + "\n")
             source.unlink()
-            messages.append(f"merged {_relative_to_root(source, root.root)} into {_relative_to_root(target, root.root)}")
+            messages.append(
+                f"merged {_relative_to_root(source, root.root)} into {_relative_to_root(target, root.root)}"
+            )
 
         else:
             return {
@@ -950,7 +991,11 @@ def apply_markdown_memory_batch(root: MemoryRoot, operations: list[dict[str, Any
         if not success:
             return {"success": False, "error": message, "backup": backup, "path": str(path)}
 
-    return {"success": True, "message": "; ".join(messages) or "No changes.", "path": str(root.root)}
+    return {
+        "success": True,
+        "message": "; ".join(messages) or "No changes.",
+        "path": str(root.root),
+    }
 
 
 async def get_memory_settings() -> dict[str, Any]:
@@ -999,7 +1044,12 @@ def apply_memory_batch(
     next_entries = list(current_entries)
     for index, operation in enumerate(operations):
         if not isinstance(operation, dict):
-            return False, f"Operation {index + 1}: must be an object", current_entries, current_usage
+            return (
+                False,
+                f"Operation {index + 1}: must be an object",
+                current_entries,
+                current_usage,
+            )
         action = operation.get("action")
         content = normalize_memory_text(str(operation.get("content") or ""))
         old_text = normalize_memory_text(str(operation.get("old_text") or ""))
@@ -1008,21 +1058,46 @@ def apply_memory_batch(
         if action in {"add", "replace"}:
             validation_error = memory_text_error(content)
             if validation_error:
-                return False, f"{operation_name}: {validation_error}", current_entries, current_usage
+                return (
+                    False,
+                    f"{operation_name}: {validation_error}",
+                    current_entries,
+                    current_usage,
+                )
 
         if action == "add":
             if not content:
-                return False, f"{operation_name}: content is required", current_entries, current_usage
+                return (
+                    False,
+                    f"{operation_name}: content is required",
+                    current_entries,
+                    current_usage,
+                )
             if content not in next_entries:
                 next_entries.append(content)
         elif action == "replace":
             if not old_text:
-                return False, f"{operation_name}: old_text is required", current_entries, current_usage
+                return (
+                    False,
+                    f"{operation_name}: old_text is required",
+                    current_entries,
+                    current_usage,
+                )
             if not content:
-                return False, f"{operation_name}: content is required", current_entries, current_usage
+                return (
+                    False,
+                    f"{operation_name}: content is required",
+                    current_entries,
+                    current_usage,
+                )
             matches = [i for i, entry in enumerate(next_entries) if old_text in entry]
             if not matches:
-                return False, f"{operation_name}: no entry matched '{old_text}'", current_entries, current_usage
+                return (
+                    False,
+                    f"{operation_name}: no entry matched '{old_text}'",
+                    current_entries,
+                    current_usage,
+                )
             if len({next_entries[i] for i in matches}) > 1:
                 return (
                     False,
@@ -1033,10 +1108,20 @@ def apply_memory_batch(
             next_entries[matches[0]] = content
         elif action == "remove":
             if not old_text:
-                return False, f"{operation_name}: old_text is required", current_entries, current_usage
+                return (
+                    False,
+                    f"{operation_name}: old_text is required",
+                    current_entries,
+                    current_usage,
+                )
             matches = [i for i, entry in enumerate(next_entries) if old_text in entry]
             if not matches:
-                return False, f"{operation_name}: no entry matched '{old_text}'", current_entries, current_usage
+                return (
+                    False,
+                    f"{operation_name}: no entry matched '{old_text}'",
+                    current_entries,
+                    current_usage,
+                )
             if len({next_entries[i] for i in matches}) > 1:
                 return (
                     False,
@@ -1061,7 +1146,12 @@ def apply_memory_batch(
             current_entries,
             current_usage,
         )
-    return True, f"Applied {len(operations)} operation(s).", next_entries, f"{next_usage_count}/{character_limit}"
+    return (
+        True,
+        f"Applied {len(operations)} operation(s).",
+        next_entries,
+        f"{next_usage_count}/{character_limit}",
+    )
 
 
 async def write_memory(
@@ -1138,7 +1228,9 @@ async def read_memory_state(user_id: str, workspace: str) -> dict[str, Any]:
     if workspace:
         workspace_memory = await resolve_memory_file(user_id, workspace, "workspace")
         workspace_entries = await asyncio.to_thread(read_memory_entries, workspace_memory.path)
-        workspace_usage = f"{measure_memory_entries(workspace_entries)}/{workspace_memory.character_limit}"
+        workspace_usage = (
+            f"{measure_memory_entries(workspace_entries)}/{workspace_memory.character_limit}"
+        )
         workspace_path_value = str(workspace_memory.path)
     return {
         "settings": settings,
@@ -1175,7 +1267,9 @@ async def recall_memory_context(
     snippets_by_scope: dict[str, list[MemorySnippet]] = {"user": [], "workspace": []}
 
     for root in roots:
-        baseline_text = root.baseline_path.read_text(errors="replace") if root.baseline_path.is_file() else ""
+        baseline_text = (
+            root.baseline_path.read_text(errors="replace") if root.baseline_path.is_file() else ""
+        )
         contextual_query = query
         if baseline_text:
             baseline_links = _extract_baseline_links(baseline_text)
@@ -1192,7 +1286,8 @@ async def recall_memory_context(
             snippets_by_scope[root.scope].extend(
                 snippet
                 for snippet in snippets
-                if snippet.path != root.baseline_path.name and not PROMPT_THREAT_RE.search(snippet.snippet)
+                if snippet.path != root.baseline_path.name
+                and not PROMPT_THREAT_RE.search(snippet.snippet)
             )
     return MemoryContext(
         user=snippets_by_scope["user"],
@@ -1317,7 +1412,9 @@ async def list_memory_files_state(
                         "path": rel,
                         "size": stat.st_size,
                         "modified_at": stat.st_mtime,
-                        "headings": [section["heading"] for section in sections if section.get("heading")][:12],
+                        "headings": [
+                            section["heading"] for section in sections if section.get("heading")
+                        ][:12],
                         "baseline": path == root.baseline_path,
                         "trash": _is_trash_path(_relative_to_root(path, root.root)),
                     }
@@ -1423,7 +1520,9 @@ def summarize_recent_conversation(messages: list[dict[str, Any]], assistant_repl
     return "\n\n".join(lines)
 
 
-def build_memory_review_prompt(memory_state: dict[str, Any], workspace: str, transcript: str) -> str:
+def build_memory_review_prompt(
+    memory_state: dict[str, Any], workspace: str, transcript: str
+) -> str:
     return (
         "Review the completed conversation and decide whether cptr should remember "
         "stable facts. Return ONLY JSON with this shape:\n"
@@ -1494,29 +1593,19 @@ async def run_memory_review(
     model: str,
 ) -> None:
     try:
-        from cptr.utils.ai import chat_completion
-        from cptr.utils.chat_task import _default_base_url
-        from cptr.utils.config import _get_jwt_secret
-        from cptr.utils.crypto import decrypt_key
-        from cptr.utils.json_parser import extract_json
+        from cptr.utils.ai import generate_json
 
         memory_state = await read_memory_state(user_id, workspace)
         transcript = summarize_recent_conversation(conversation_messages, assistant_reply)
         prompt = build_memory_review_prompt(memory_state, workspace, transcript)
-        provider = model_connection["provider"]
-        api_key = decrypt_key(model_connection.get("api_key", ""), _get_jwt_secret())
-        base_url = model_connection.get("base_url") or _default_base_url(provider)
-        text = await chat_completion(
-            provider=provider,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
+        parsed = await generate_json(
+            model_id=await Config.get("memory.background_review.model"),
+            active_connection=model_connection,
+            active_model=model,
             messages=[{"role": "user", "content": prompt}],
             system="You are cptr's private memory reviewer. Return only valid JSON.",
             max_tokens=700,
-            api_type=model_connection.get("api_type", "chat_completions"),
         )
-        parsed = extract_json(text)
         if not isinstance(parsed, dict):
             return
         for scope in ("user", "workspace"):
