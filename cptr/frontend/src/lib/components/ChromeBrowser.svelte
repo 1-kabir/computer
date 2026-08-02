@@ -79,6 +79,7 @@
 	let keepKeyboardFocus = false;
 	let audioClockOrigin: number | undefined;
 	let reapplyViewportAfterConfig = true;
+	let keyframeRequested = false;
 	const pressedKeys = new Map<string, Record<string, unknown>>();
 	const touchPoints = new Map<number, Record<string, unknown>>();
 	const macClient = /Mac|iPhone|iPad/.test(navigator.userAgent);
@@ -86,6 +87,52 @@
 
 	function send(message: Record<string, unknown>) {
 		if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+	}
+
+	function requestKeyframe() {
+		if (keyframeRequested) return;
+		keyframeRequested = true;
+		send({ type: 'request_keyframe' });
+	}
+
+	function closeSocket() {
+		const current = socket;
+		socket = undefined;
+		if (!current) return;
+		current.onopen = null;
+		current.onmessage = null;
+		current.onclose = null;
+		current.onerror = null;
+		if (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING) {
+			current.close();
+		}
+	}
+
+	function resetInputState() {
+		pressedKeys.clear();
+		touchPoints.clear();
+		pendingPointer = undefined;
+		if (pointerFrame) {
+			cancelAnimationFrame(pointerFrame);
+			pointerFrame = 0;
+		}
+	}
+
+	function resetMediaState() {
+		try {
+			decoder?.close();
+		} catch {}
+		try {
+			audioDecoder?.close();
+		} catch {}
+		decoder = undefined;
+		audioDecoder = undefined;
+		audioClockOrigin = undefined;
+		keyframeRequested = false;
+		if (audioContext) {
+			void audioContext.close();
+			audioContext = undefined;
+		}
 	}
 
 	async function collectDeviceProfile(): Promise<DeviceProfile> {
@@ -140,6 +187,14 @@
 
 	function connect() {
 		if (disposed) return;
+		if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = undefined;
+		}
+		releaseKeys();
+		resetInputState();
+		resetMediaState();
+		closeSocket();
 		ready = false;
 		lastViewport = '';
 		reapplyViewportAfterConfig = true;
@@ -155,6 +210,7 @@
 		socket.onmessage = receive;
 		socket.onclose = () => {
 			if (disposed) return;
+			socket = undefined;
 			onstatus('lost', 'Chrome connection lost');
 			const delays = [1000, 2000, 5000];
 			reconnectTimer = setTimeout(connect, delays[Math.min(reconnectAttempt++, delays.length - 1)]);
@@ -212,6 +268,11 @@
 		const media = view.getUint8(0);
 		const timestamp = Number(view.getBigUint64(6));
 		if (media === 1 && decoder?.state === 'configured') {
+			// Drop video when WebCodecs is falling behind; a fresh keyframe catches up.
+			if (decoder.decodeQueueSize > 3) {
+				requestKeyframe();
+				return;
+			}
 			try {
 				decoder.decode(
 					new EncodedVideoChunk({
@@ -221,7 +282,7 @@
 					})
 				);
 			} catch {
-				send({ type: 'request_keyframe' });
+				requestKeyframe();
 			}
 		} else if (media === 2 && audioDecoder?.state === 'configured') {
 			try {
@@ -248,9 +309,10 @@
 					hasFrame = true;
 					onstatus('playing');
 				}
+				keyframeRequested = false;
 			},
 			error() {
-				send({ type: 'request_keyframe' });
+				requestKeyframe();
 			}
 		});
 		decoder.configure({ codec: config.codec, optimizeForLatency: true });
@@ -637,15 +699,13 @@
 	onDestroy(() => {
 		disposed = true;
 		releaseKeys();
+		resetInputState();
 		observer?.disconnect();
 		window.visualViewport?.removeEventListener('resize', visualViewportResize);
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		if (viewportTimer) clearTimeout(viewportTimer);
-		if (pointerFrame) cancelAnimationFrame(pointerFrame);
-		socket?.close();
-		decoder?.close();
-		audioDecoder?.close();
-		if (audioContext) void audioContext.close();
+		closeSocket();
+		resetMediaState();
 	});
 </script>
 
