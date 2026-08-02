@@ -240,7 +240,7 @@ class TelegramAdapter(BaseAdapter):
         text = message.get("text") or message.get("caption") or ""
 
         # Collect attachments from media types
-        attachments: list = []
+        attachments: list[Attachment] = []
 
         # Photos — Telegram sends multiple sizes, pick the largest
         if message.get("photo"):
@@ -286,7 +286,6 @@ class TelegramAdapter(BaseAdapter):
             audio = message["audio"]
             file_data = await self._download_file(audio["file_id"])
             if file_data:
-                from cptr.utils.bridge import Attachment
                 fname = audio.get("file_name", "audio.mp3")
                 attachments.append(Attachment(
                     type="audio",

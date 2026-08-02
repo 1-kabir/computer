@@ -68,18 +68,19 @@ def _find_claude_desktop_command() -> str | None:
         localappdata = os.environ.get("LOCALAPPDATA")
         packages_dir = os.path.join(localappdata, "Packages") if localappdata else None
         if packages_dir and os.path.isdir(packages_dir):
-            for name in os.listdir(packages_dir):
-                if name.startswith("Claude_"):
-                    roots.append(
-                        os.path.join(
-                            packages_dir,
-                            name,
-                            "LocalCache",
-                            "Roaming",
-                            "Claude",
-                            "claude-code",
+            with suppress(OSError):
+                for name in os.listdir(packages_dir):
+                    if name.startswith("Claude_"):
+                        roots.append(
+                            os.path.join(
+                                packages_dir,
+                                name,
+                                "LocalCache",
+                                "Roaming",
+                                "Claude",
+                                "claude-code",
+                            )
                         )
-                    )
         relative_paths = (("claude.exe",),)
     else:
         roots = [
@@ -100,16 +101,17 @@ def _find_claude_desktop_command() -> str | None:
     for root in roots:
         if not os.path.isdir(root):
             continue
-        for name in os.listdir(root):
-            version_dir = os.path.join(root, name)
-            version = _parse_version_tuple(name)
-            if version is None or not os.path.isdir(version_dir):
-                continue
-            for relative_path in relative_paths:
-                candidate = os.path.join(version_dir, *relative_path)
-                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                    candidates.append((version, candidate))
-                    break
+        with suppress(OSError):
+            for name in os.listdir(root):
+                version_dir = os.path.join(root, name)
+                version = _parse_version_tuple(name)
+                if version is None or not os.path.isdir(version_dir):
+                    continue
+                for relative_path in relative_paths:
+                    candidate = os.path.join(version_dir, *relative_path)
+                    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                        candidates.append((version, candidate))
+                        break
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
