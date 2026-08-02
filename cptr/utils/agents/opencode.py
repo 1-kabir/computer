@@ -109,6 +109,8 @@ async def _request(
         try:
             response = await client.request(method, f"/{path}", headers=headers, json=json_body)
             response.raise_for_status()
+            if not response.content:
+                return {}
             data = response.json()
             return data if isinstance(data, dict) else {}
         except Exception as exc:  # noqa: BLE001 - try alternate generated route names.
@@ -181,7 +183,13 @@ async def _start_opencode_prompt(
     await _request(
         client,
         "POST",
-        ["session.promptAsync", "session/promptAsync", "session/prompt"],
+        [
+            f"session/{session_id}/prompt_async",
+            f"session/{session_id}/message",
+            "session.promptAsync",
+            "session/promptAsync",
+            "session/prompt",
+        ],
         headers=headers,
         json_body={
             "sessionID": session_id,
@@ -191,15 +199,40 @@ async def _start_opencode_prompt(
     )
 
 
-def _text_from_event(event: dict[str, Any], emitted: dict[str, str]) -> str | None:
+def _role_update_from_event(event: dict[str, Any]) -> tuple[str, str] | None:
+    if event.get("type") != "message.updated":
+        return None
+    props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
+    info = props.get("info") if isinstance(props.get("info"), dict) else {}
+    message_id = info.get("id")
+    role = info.get("role")
+    if isinstance(message_id, str) and isinstance(role, str):
+        return message_id, role
+    return None
+
+
+def _text_from_event(
+    event: dict[str, Any],
+    emitted: dict[str, str],
+    message_roles: dict[str, str],
+) -> str | None:
     event_type = event.get("type")
     props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
     if event_type == "message.part.delta":
+        message_id = props.get("messageID")
+        if isinstance(message_id, str) and message_roles.get(message_id) == "user":
+            return None
         delta = props.get("delta")
+        part_id = props.get("partID")
+        if isinstance(part_id, str) and isinstance(delta, str):
+            emitted[part_id] = f"{emitted.get(part_id, '')}{delta}"
         return delta if isinstance(delta, str) and delta else None
     if event_type == "message.part.updated":
         part = props.get("part") if isinstance(props.get("part"), dict) else {}
         if part.get("type") not in ("text", "reasoning"):
+            return None
+        message_id = part.get("messageID")
+        if isinstance(message_id, str) and message_roles.get(message_id) == "user":
             return None
         part_id = part.get("id")
         text = part.get("text")
@@ -314,7 +347,11 @@ async def run_opencode_agent(
                             await _request(
                                 client,
                                 "POST",
-                                ["session.abort", "session/abort"],
+                                [
+                                    f"session/{session_id}/abort",
+                                    "session.abort",
+                                    "session/abort",
+                                ],
                                 headers=headers,
                                 json_body={"sessionID": session_id},
                             )
@@ -346,6 +383,7 @@ async def _collect_opencode_events(
     emitted: dict[str, str],
     queue: asyncio.Queue[AgentEvent | None],
 ) -> None:
+    message_roles: dict[str, str] = {}
     try:
         for path in ("event.subscribe", "event/subscribe", "event"):
             try:
@@ -367,7 +405,10 @@ async def _collect_opencode_events(
                             )
                             if props.get("sessionID") != session_id:
                                 continue
-                            text = _text_from_event(event, emitted)
+                            role_update = _role_update_from_event(event)
+                            if role_update:
+                                message_roles[role_update[0]] = role_update[1]
+                            text = _text_from_event(event, emitted, message_roles)
                             if text:
                                 await queue.put(AgentTextDelta(text))
                             tool = _tool_from_event(event)
