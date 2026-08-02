@@ -61,7 +61,14 @@ _STREAM_TIMEOUT = httpx.Timeout(
     read=STREAM_READ_TIMEOUT_SECONDS,
     write=STREAM_WRITE_TIMEOUT_SECONDS,
 )
+
+
+class EmptyCompletionError(RuntimeError):
+    pass
+
+
 _STREAM_RETRY_ERRORS = (
+    EmptyCompletionError,
     httpx.ConnectError,
     httpx.ConnectTimeout,
     httpx.HTTPStatusError,
@@ -799,7 +806,7 @@ async def stream_openai_completions(
                         emitted = True
                         yield {"type": "output", "item": item}
                     if not emitted:
-                        raise RuntimeError(
+                        raise EmptyCompletionError(
                             "Upstream provider returned an empty completion with no text, "
                             "output items, tool calls, or usage tokens."
                         )
