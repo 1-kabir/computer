@@ -61,24 +61,45 @@ def _resolve_command(command: str) -> str | None:
 
 def _find_claude_desktop_command() -> str | None:
     if os.name == "nt":
+        roots = []
         appdata = os.environ.get("APPDATA")
-        root = os.path.join(appdata, "Claude", "claude-code") if appdata else None
+        if appdata:
+            roots.append(os.path.join(appdata, "Claude", "claude-code"))
+        localappdata = os.environ.get("LOCALAPPDATA")
+        packages_dir = os.path.join(localappdata, "Packages") if localappdata else None
+        if packages_dir and os.path.isdir(packages_dir):
+            for name in os.listdir(packages_dir):
+                if name.startswith("Claude_"):
+                    roots.append(
+                        os.path.join(
+                            packages_dir,
+                            name,
+                            "LocalCache",
+                            "Roaming",
+                            "Claude",
+                            "claude-code",
+                        )
+                    )
         relative_paths = (("claude.exe",),)
     else:
-        root = os.path.join(
-            os.path.expanduser("~"),
-            "Library",
-            "Application Support",
-            "Claude",
-            "claude-code",
-        )
+        roots = [
+            os.path.join(
+                os.path.expanduser("~"),
+                "Library",
+                "Application Support",
+                "Claude",
+                "claude-code",
+            )
+        ]
         relative_paths = (
             ("claude.app", "Contents", "MacOS", "claude"),
             ("claude",),
         )
 
     candidates: list[tuple[tuple[int, int, int], str]] = []
-    if root is not None and os.path.isdir(root):
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
         for name in os.listdir(root):
             version_dir = os.path.join(root, name)
             version = _parse_version_tuple(name)
@@ -89,7 +110,7 @@ def _find_claude_desktop_command() -> str | None:
                 if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                     candidates.append((version, candidate))
                     break
-    return max(candidates)[1] if candidates else None
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
 async def _run_probe(
