@@ -11,6 +11,7 @@ import socket
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -25,10 +26,33 @@ from cptr.utils.agents.events import (
 from cptr.utils.agents.prompts import turn_prompt_text
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def opencode_server_url_candidates(server_url: str) -> list[str]:
+    server_url = server_url.strip()
+    if not server_url:
+        return []
+    parsed = urlsplit(server_url)
+    in_container = Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+    if not in_container or parsed.hostname not in _LOOPBACK_HOSTS:
+        return [server_url]
+    docker_url = urlunsplit(
+        (
+            parsed.scheme,
+            f"host.docker.internal{':' + str(parsed.port) if parsed.port else ''}",
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+    return [server_url] if docker_url == server_url else [server_url, docker_url]
 
 
 async def _server_url_from_stdout(proc: asyncio.subprocess.Process, port: int) -> str:
@@ -306,70 +330,98 @@ async def run_opencode_agent(
     try:
         async with _opencode_server(profile, workspace) as (server_url, _proc):
             headers = _headers(profile)
-            async with httpx.AsyncClient(base_url=server_url, timeout=None) as client:
-                session_id = _resume_session_id(resume_state)
-                resumed = bool(session_id)
-                if session_id is None:
-                    session_id = await _create_opencode_session(client, headers)
-
-                parsed_model = _parse_model(model)
-                while True:
-                    emitted: dict[str, str] = {}
-                    event_queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
-                    event_task = asyncio.create_task(
-                        _collect_opencode_events(client, headers, session_id, emitted, event_queue)
-                    )
-
-                    prompt = turn_prompt_text(messages, system_prompt, resumed=resumed)
-                    parts = _opencode_parts(prompt, attachments)
-                    try:
-                        try:
-                            await _start_opencode_prompt(
-                                client, headers, session_id, parsed_model, parts
-                            )
-                        except Exception:
-                            if not resumed:
-                                raise
-                            event_task.cancel()
-                            with suppress(asyncio.CancelledError):
-                                await event_task
+            urls = opencode_server_url_candidates(server_url)
+            last_connect_error: Exception | None = None
+            for index, candidate_url in enumerate(urls):
+                try:
+                    async with httpx.AsyncClient(
+                        base_url=candidate_url,
+                        timeout=httpx.Timeout(None, connect=5),
+                    ) as client:
+                        session_id = _resume_session_id(resume_state)
+                        resumed = bool(session_id)
+                        if session_id is None:
                             session_id = await _create_opencode_session(client, headers)
-                            resumed = False
-                            continue
 
+                        parsed_model = _parse_model(model)
                         while True:
-                            item = await event_queue.get()
-                            if item is None:
-                                break
-                            yield item
-                    except asyncio.CancelledError:
-                        with suppress(Exception):
-                            await _request(
-                                client,
-                                "POST",
-                                [
-                                    f"session/{session_id}/abort",
-                                    "session.abort",
-                                    "session/abort",
-                                ],
-                                headers=headers,
-                                json_body={"sessionID": session_id},
+                            emitted: dict[str, str] = {}
+                            event_queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+                            event_task = asyncio.create_task(
+                                _collect_opencode_events(
+                                    client, headers, session_id, emitted, event_queue
+                                )
                             )
-                        raise
-                    finally:
-                        event_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await event_task
-                    break
 
-                yield AgentDone(
-                    resume_state={
-                        "profile_id": profile["id"],
-                        "session_id": session_id,
-                        "workspace": workspace,
-                        "model": model,
-                    }
-                )
+                            prompt = turn_prompt_text(messages, system_prompt, resumed=resumed)
+                            parts = _opencode_parts(prompt, attachments)
+                            try:
+                                try:
+                                    await _start_opencode_prompt(
+                                        client, headers, session_id, parsed_model, parts
+                                    )
+                                except Exception:
+                                    if not resumed:
+                                        raise
+                                    event_task.cancel()
+                                    with suppress(asyncio.CancelledError):
+                                        await event_task
+                                    session_id = await _create_opencode_session(client, headers)
+                                    resumed = False
+                                    continue
+
+                                while True:
+                                    item = await event_queue.get()
+                                    if item is None:
+                                        break
+                                    yield item
+                            except asyncio.CancelledError:
+                                with suppress(Exception):
+                                    await _request(
+                                        client,
+                                        "POST",
+                                        [
+                                            f"session/{session_id}/abort",
+                                            "session.abort",
+                                            "session/abort",
+                                        ],
+                                        headers=headers,
+                                        json_body={"sessionID": session_id},
+                                    )
+                                raise
+                            finally:
+                                event_task.cancel()
+                                with suppress(asyncio.CancelledError):
+                                    await event_task
+                            break
+
+                        yield AgentDone(
+                            resume_state={
+                                "profile_id": profile["id"],
+                                "session_id": session_id,
+                                "workspace": workspace,
+                                "model": model,
+                            }
+                        )
+                    return
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    last_connect_error = exc
+                    if index < len(urls) - 1:
+                        continue
+                    if len(urls) > 1:
+                        port = urlsplit(server_url).port or 4096
+                        raise RuntimeError(
+                            "Unable to connect to OpenCode from Docker. If OpenCode is running "
+                            "on the host, start it with "
+                            f"`opencode serve --hostname 0.0.0.0 --port {port}` and set the "
+                            f"OpenCode Server URL to `http://host.docker.internal:{port}`. "
+                            "On Linux Docker, add "
+                            "`--add-host=host.docker.internal:host-gateway` if that hostname "
+                            "is unavailable."
+                        ) from exc
+                    raise
+            if last_connect_error:
+                raise last_connect_error
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - surfaced in chat.

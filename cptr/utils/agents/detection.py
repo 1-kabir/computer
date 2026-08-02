@@ -21,6 +21,7 @@ from cptr.utils.agents.models import (
     model_id_for_profile,
     normalize_agent_profiles,
 )
+from cptr.utils.agents.opencode import opencode_server_url_candidates
 
 DETECTION_TTL_SECONDS = 30
 CLAUDE_MODEL_FALLBACKS = [
@@ -456,7 +457,9 @@ async def _probe_cursor_models(command: str, profile: dict[str, Any]) -> list[st
     )
     try:
         await asyncio.wait_for(client.start(), timeout=10)
-        result = await asyncio.wait_for(client.request("cursor/list_available_models", {}), timeout=5)
+        result = await asyncio.wait_for(
+            client.request("cursor/list_available_models", {}), timeout=5
+        )
         models = []
         for item in result.get("models") or []:
             if isinstance(item, dict) and isinstance(item.get("value"), str):
@@ -512,30 +515,42 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
                 env={**env, "OPENCODE_CONFIG_CONTENT": "{}"},
             )
             server_url = await _read_opencode_server_url(proc, port)
-        async with httpx.AsyncClient(base_url=server_url, timeout=5) as client:
-            headers = {}
-            if password:
-                import base64
+        headers = {}
+        if password:
+            import base64
 
-                token = base64.b64encode(f"opencode:{password}".encode()).decode()
-                headers["Authorization"] = f"Basic {token}"
-            providers = await _opencode_json(client, ["provider.list", "provider/list", "provider"], headers)
-            provider_list = providers.get("data") if isinstance(providers.get("data"), dict) else providers
-            connected = set(provider_list.get("connected") or [])
-            all_providers = provider_list.get("all") or []
-            models: list[str] = []
-            for provider in all_providers:
-                if not isinstance(provider, dict):
-                    continue
-                provider_id = provider.get("id")
-                if not isinstance(provider_id, str) or provider_id not in connected:
-                    continue
-                raw_models = provider.get("models")
-                if isinstance(raw_models, dict):
-                    for model_id in raw_models:
-                        if isinstance(model_id, str) and model_id.strip():
-                            models.append(f"{provider_id}/{model_id.strip()}")
-            return models or None
+            token = base64.b64encode(f"opencode:{password}".encode()).decode()
+            headers["Authorization"] = f"Basic {token}"
+        for candidate_url in opencode_server_url_candidates(server_url):
+            try:
+                async with httpx.AsyncClient(base_url=candidate_url, timeout=5) as client:
+                    providers = await _opencode_json(
+                        client, ["provider.list", "provider/list", "provider"], headers
+                    )
+                    provider_list = (
+                        providers.get("data")
+                        if isinstance(providers.get("data"), dict)
+                        else providers
+                    )
+                    connected = set(provider_list.get("connected") or [])
+                    all_providers = provider_list.get("all") or []
+                    models: list[str] = []
+                    for provider in all_providers:
+                        if not isinstance(provider, dict):
+                            continue
+                        provider_id = provider.get("id")
+                        if not isinstance(provider_id, str) or provider_id not in connected:
+                            continue
+                        raw_models = provider.get("models")
+                        if isinstance(raw_models, dict):
+                            for model_id in raw_models:
+                                if isinstance(model_id, str) and model_id.strip():
+                                    models.append(f"{provider_id}/{model_id.strip()}")
+                    if models:
+                        return models
+            except Exception:
+                continue
+        return None
     except Exception:
         return None
     finally:
