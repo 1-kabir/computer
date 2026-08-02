@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
 _current_bot_manager: "BotManager | None" = None
@@ -612,9 +611,6 @@ class BotManager:
         file_entries match the web UI format so _load_message_history handles
         them automatically (base64 for images, file:// refs for documents).
         """
-        from cptr.models import Config
-        from cptr.utils.config import _get_jwt_secret
-        from cptr.utils.crypto import decrypt_key
         from cptr.utils.storage import get_storage
 
         file_entries: list[dict] = []
@@ -915,13 +911,14 @@ class BotManager:
                     except Exception:
                         logger.exception("[bridge] Failed to send final chunk")
             else:
-                # Discord: edit the placeholder, then send overflow
+                # Edit the placeholder, then send overflow.
                 if len(final_display) <= max_len and platform_msg_id:
                     try:
                         await adapter.edit(platform_chat_id, platform_msg_id, final_display)
                         return
                     except Exception:
-                        pass
+                        logger.debug("[bridge] Final edit failed", exc_info=True)
+                        return
 
                 chunks = chunk_message(final_display, max_len)
                 if platform_msg_id and chunks:
@@ -929,7 +926,8 @@ class BotManager:
                         await adapter.edit(platform_chat_id, platform_msg_id, chunks[0])
                         chunks = chunks[1:]
                     except Exception:
-                        pass
+                        logger.debug("[bridge] Final chunk edit failed", exc_info=True)
+                        return
                 for chunk in chunks:
                     try:
                         await adapter.send(platform_chat_id, chunk)
