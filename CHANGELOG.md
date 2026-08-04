@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.21] - 2026-08-04
+
+### Added
+
+- 📊 **Usage has its own Settings page.** See your token activity, active streaks, favorite models, busy days, and most used tools in one place.
+- 🛠️ **Tool approval has its own Admin page.** Admins can choose the review model and decide which built-in tools can run automatically.
+
+### Changed
+
+- 🤖 **Agent chats can start from Home.** Coding agents can now answer even when a chat is not attached to a workspace.
+- 🌐 **Browser sessions recover more smoothly.** Browser streaming catches up faster when video falls behind and cleans up more reliably when a session closes.
+- 🧰 **OpenCode on Docker is easier to connect.** Computer now tries the right host address when needed and gives clearer setup guidance if it cannot connect.
+- 📝 **More C and C++ files open with the right language.** Files ending in `.cc`, `.cxx`, `.hh`, and `.hxx` are now recognized.
+
+### Fixed
+
+- 💬 **Empty replies are retried instead of getting stuck.** If a chat service sends back nothing useful, Computer now tries again before showing a failure.
+- 🔊 **Text-to-speech cleans up after playback.** Listening to a message no longer leaves old audio resources around.
+- 🧰 **Deleted agent profiles stay deleted right away.** Removing a saved agent now saves the change immediately.
+- 💻 **Terminal and browser sessions close more cleanly.** Leaving a session is less likely to leave old listeners or connections behind.
+- 📱 **Signal message edits work more naturally.** Updated replies are now sent as edits when Signal supports it.
+
 ## [0.9.20] - 2026-08-01
 
 ### Added
