@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
 import json
 import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from cptr.models import Chat, ChatMessage, Config, is_internal_chat
 from cptr.utils.config import check_access, now_ms, _get_jwt_secret
 from cptr.utils.crypto import decrypt_key
+from cptr.utils.db import get_db
 from cptr.utils.workspace import ensure_cptr_gitignored
 from cptr.utils.chat_export import chat_directory
 
@@ -322,6 +326,218 @@ async def get_models(request: Request):
         models = [m for m in models if m["id"] not in inactive]
 
     return {"models": models, "default": default_model}
+
+
+@router.get("/usage")
+async def get_usage(request: Request):
+    """Aggregate personal chat usage for the settings Usage tab."""
+    user_id = _get_user(request)
+
+    async with await get_db() as db:
+        chat_result = await db.execute(select(Chat).where(Chat.user_id == user_id))
+        chats = [
+            chat
+            for chat in chat_result.scalars().all()
+            if not is_internal_chat(chat.meta if isinstance(chat.meta, dict) else None)
+        ]
+
+        messages = []
+        if chats:
+            message_result = await db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.chat_id.in_([chat.id for chat in chats]))
+                .order_by(ChatMessage.created_at)
+            )
+            messages = list(message_result.scalars().all())
+
+    chat_ids_by_day: dict[str, set[str]] = defaultdict(set)
+    day_stats: dict[str, dict] = defaultdict(lambda: {"tokens": 0, "messages": 0, "models": {}})
+    chat_bounds: dict[str, list[int]] = {}
+    model_stats: dict[str, dict] = defaultdict(lambda: {"messages": 0, "total_tokens": 0})
+    tool_counts: dict[str, int] = defaultdict(int)
+    models_used: set[str] = set()
+    user_messages = 0
+    assistant_messages = 0
+    lifetime_tokens = 0
+
+    for message in messages:
+        created_at = int(message.created_at or 0)
+        created_seconds = created_at / (
+            1_000_000_000
+            if created_at > 10_000_000_000_000
+            else 1000
+            if created_at > 10_000_000_000
+            else 1
+        )
+        day = datetime.fromtimestamp(created_seconds, tz=timezone.utc).date().isoformat()
+        day_stats[day]["messages"] += 1
+        chat_ids_by_day[day].add(message.chat_id)
+
+        bounds = chat_bounds.setdefault(message.chat_id, [message.created_at, message.created_at])
+        bounds[0] = min(bounds[0], message.created_at)
+        bounds[1] = max(bounds[1], message.created_at)
+
+        if message.role == "user":
+            user_messages += 1
+        elif message.role == "assistant":
+            assistant_messages += 1
+
+        model_id = message.model or None
+        usage = message.usage if isinstance(message.usage, dict) else {}
+        try:
+            tokens = max(
+                0,
+                int(
+                    usage.get("total_tokens")
+                    or (usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+                    + (usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+                    or 0
+                ),
+            )
+        except (TypeError, ValueError):
+            tokens = 0
+        if tokens:
+            lifetime_tokens += tokens
+            day_stats[day]["tokens"] += tokens
+
+        if message.role == "assistant" and model_id:
+            models_used.add(model_id)
+            day_models = day_stats[day]["models"]
+            day_models[model_id] = day_models.get(model_id, 0) + 1
+            model_stats[model_id]["messages"] += 1
+            model_stats[model_id]["total_tokens"] += tokens
+
+        if isinstance(message.output, list):
+            for item in message.output:
+                if not isinstance(item, dict):
+                    continue
+                item_type = str(item.get("type") or "")
+                if "tool" not in item_type and "function_call" not in item_type:
+                    continue
+                name = item.get("name")
+                if not name and isinstance(item.get("function"), dict):
+                    name = item["function"].get("name")
+                if isinstance(name, str) and name:
+                    tool_counts[name] += 1
+
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=364)
+    heatmap = []
+    cumulative_tokens = 0
+    cumulative_messages = 0
+    cumulative_chats: set[str] = set()
+    weekly: dict[str, dict] = defaultdict(
+        lambda: {"tokens": 0, "messages": 0, "chats": set(), "models": {}}
+    )
+    cumulative = []
+
+    for offset in range(365):
+        current = start + timedelta(days=offset)
+        key = current.isoformat()
+        stats = day_stats.get(key, {"tokens": 0, "messages": 0, "models": {}})
+        chats_for_day = chat_ids_by_day.get(key, set())
+        entry = {
+            "date": key,
+            "tokens": stats["tokens"],
+            "messages": stats["messages"],
+            "chats": len(chats_for_day),
+            "models": stats["models"],
+        }
+        heatmap.append(entry)
+
+        week_key = (current - timedelta(days=current.weekday())).isoformat()
+        weekly_entry = weekly[week_key]
+        weekly_entry["tokens"] += stats["tokens"]
+        weekly_entry["messages"] += stats["messages"]
+        weekly_entry["chats"].update(chats_for_day)
+        for model_id, count in stats["models"].items():
+            weekly_entry["models"][model_id] = weekly_entry["models"].get(model_id, 0) + count
+
+        cumulative_tokens += stats["tokens"]
+        cumulative_messages += stats["messages"]
+        cumulative_chats.update(chats_for_day)
+        cumulative.append(
+            {
+                "date": key,
+                "tokens": cumulative_tokens,
+                "messages": cumulative_messages,
+                "chats": len(cumulative_chats),
+                "models": dict(stats["models"]),
+            }
+        )
+
+    active_days = [day for day, stats in day_stats.items() if stats["messages"] > 0]
+    active_dates = {date.fromisoformat(day) for day in active_days}
+    current_streak = 0
+    cursor = today
+    while cursor in active_dates:
+        current_streak += 1
+        cursor -= timedelta(days=1)
+
+    longest_streak = 0
+    run = 0
+    previous = None
+    for active_date in sorted(active_dates):
+        run = run + 1 if previous and active_date == previous + timedelta(days=1) else 1
+        previous = active_date
+        longest_streak = max(longest_streak, run)
+
+    total_chats = len(chats)
+    longest_chat_seconds = 0
+    for first, last in chat_bounds.values():
+        longest_chat_seconds = max(longest_chat_seconds, max(0, (last - first) // 1000))
+
+    weekly_heatmap = [
+        {
+            "date": week,
+            "tokens": stats["tokens"],
+            "messages": stats["messages"],
+            "chats": len(stats["chats"]),
+            "models": stats["models"],
+        }
+        for week, stats in sorted(weekly.items())
+    ]
+    total_messages = user_messages + assistant_messages
+
+    return {
+        "totals": {
+            "lifetime_tokens": lifetime_tokens,
+            "peak_daily_tokens": max((entry["tokens"] for entry in heatmap), default=0),
+            "longest_chat_seconds": longest_chat_seconds,
+            "current_streak": current_streak,
+            "longest_streak": longest_streak,
+            "models_used": len(models_used),
+            "user_messages": user_messages,
+            "assistant_messages": assistant_messages,
+            "messages": total_messages,
+            "total_chats": total_chats,
+        },
+        "insights": {
+            "average_tokens_per_chat": round(lifetime_tokens / total_chats) if total_chats else 0,
+            "average_messages_per_active_day": round(total_messages / len(active_days))
+            if active_days
+            else 0,
+            "user_message_share": round((user_messages / total_messages) * 100)
+            if total_messages
+            else 0,
+            "assistant_message_share": round((assistant_messages / total_messages) * 100)
+            if total_messages
+            else 0,
+        },
+        "heatmap": heatmap,
+        "weekly_heatmap": weekly_heatmap,
+        "cumulative_heatmap": cumulative,
+        "top_models": [
+            {"model_id": model_id, **stats}
+            for model_id, stats in sorted(
+                model_stats.items(), key=lambda item: item[1]["messages"], reverse=True
+            )
+        ],
+        "top_tools": [
+            {"name": name, "count": count}
+            for name, count in sorted(tool_counts.items(), key=lambda item: item[1], reverse=True)
+        ],
+    }
 
 
 async def _fetch_provider_models(conn: dict) -> list[str] | None:

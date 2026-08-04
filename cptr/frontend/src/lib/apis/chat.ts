@@ -78,6 +78,40 @@ export interface CompactChatResult {
 	context_usage?: ContextUsage | null;
 }
 
+export interface UsageHeatmapEntry {
+	date: string;
+	tokens: number;
+	messages: number;
+	chats: number;
+	models: Record<string, number>;
+}
+
+export interface UsageResponse {
+	totals: {
+		lifetime_tokens: number;
+		peak_daily_tokens: number;
+		longest_chat_seconds: number;
+		current_streak: number;
+		longest_streak: number;
+		models_used: number;
+		user_messages: number;
+		assistant_messages: number;
+		messages: number;
+		total_chats: number;
+	};
+	insights: {
+		average_tokens_per_chat: number;
+		average_messages_per_active_day: number;
+		user_message_share: number;
+		assistant_message_share: number;
+	};
+	heatmap: UsageHeatmapEntry[];
+	weekly_heatmap: UsageHeatmapEntry[];
+	cumulative_heatmap: UsageHeatmapEntry[];
+	top_models: { model_id: string; messages: number; total_tokens: number }[];
+	top_tools: { name: string; count: number }[];
+}
+
 // ── Queries ─────────────────────────────────────────────────
 
 export const getChats = (
@@ -95,6 +129,8 @@ export const getChat = (chatId: string, modelId?: string) => {
 	const suffix = modelId ? `?model_id=${encodeURIComponent(modelId)}` : '';
 	return fetchJSON<ChatDetail>(`/api/chats/${chatId}${suffix}`);
 };
+
+export const getUsage = () => fetchJSON<UsageResponse>('/api/chats/usage');
 
 export const deleteChat = (chatId: string) =>
 	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}`, { method: 'DELETE' });
