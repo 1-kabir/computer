@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 
 from cptr.events import EVENTS, publish_event
@@ -1545,6 +1546,7 @@ async def run_chat_task(
 
         chat_obj = await Chat.get_by_id(chat_id)
         chat_params = (chat_obj.meta or {}).get("params", {}) if chat_obj else {}
+        agent_workspace = workspace or str(Path.home())
         messages, loaded_summary = await _load_message_history(chat_id, message_id)
         skill_settings = await get_skill_settings()
         skill_authoring_allowed = _has_prior_real_chat_content(messages, loaded_summary)
@@ -1557,7 +1559,7 @@ async def run_chat_task(
         )
         memory_message, memory_files = _memory_recall_inputs(messages, regeneration_prompt)
         system = await _load_system_prompt(
-            workspace,
+            agent_workspace,
             agent_target.full_model_id,
             user_id=user_id,
             current_message=memory_message,
@@ -1573,7 +1575,7 @@ async def run_chat_task(
             if isinstance(meta_files, list):
                 current_user_files = meta_files
         agent_attachments = await prepare_agent_attachments(
-            workspace=workspace,
+            workspace=agent_workspace,
             chat_id=chat_id,
             message_id=(msg.parent_id if msg and msg.parent_id else message_id),
             files=current_user_files,
@@ -1629,7 +1631,7 @@ async def run_chat_task(
         async for event in runner(
             profile=agent_target.config,
             model=agent_target.model,
-            workspace=workspace,
+            workspace=agent_workspace,
             messages=messages,
             system_prompt=system,
             chat_params=chat_params,

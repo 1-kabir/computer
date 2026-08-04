@@ -940,7 +940,7 @@ async def send_message(body: SendMessageRequest, request: Request):
     """
     user_id = _get_user(request)
 
-    from cptr.utils.model_targets import AgentModelTarget, resolve_model_target
+    from cptr.utils.model_targets import resolve_model_target
 
     target = await resolve_model_target(body.model_id, request.app.state)
 
@@ -950,8 +950,6 @@ async def send_message(body: SendMessageRequest, request: Request):
         if not chat or chat.user_id != user_id:
             raise HTTPException(404, "chat not found")
         workspace = (chat.meta or {}).get("workspace") or None
-        if not workspace and isinstance(target, AgentModelTarget):
-            raise HTTPException(400, "Home chats require an API model")
         # Sync params into chat meta
         if chat.meta is None:
             chat.meta = {}
@@ -961,8 +959,6 @@ async def send_message(body: SendMessageRequest, request: Request):
             await Chat.update_meta(chat.id, chat.meta)
     else:
         workspace = body.workspace or None
-        if not workspace and isinstance(target, AgentModelTarget):
-            raise HTTPException(400, "Home chats require an API model")
         title = body.content[:50].strip() or "New Chat"
         meta = {
             "params": body.params,
