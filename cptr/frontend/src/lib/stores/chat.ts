@@ -5,7 +5,7 @@ import { writable, get } from 'svelte/store';
 import { toast } from 'svelte-sonner';
 import { fetchJSON } from '$lib/apis';
 import { socketStore } from '$lib/stores/socket.svelte';
-import { activeTab } from '$lib/stores';
+import { activeHomeTab, activeTab, currentWorkspace } from '$lib/stores';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
 import { i18next } from '$lib/i18n';
 
@@ -203,8 +203,12 @@ export function bindGlobalChatListener() {
 			// ── Notifications ──────────────────────────────────
 			// Skip if user is actively viewing this chat
 			const currentTab = get(activeTab);
+			const currentHomeTab = get(activeHomeTab);
+			const isHome = get(currentWorkspace) === null;
 			const isViewingThisChat =
-				!document.hidden && currentTab?.type === 'chat' && currentTab?.path === data.chat_id;
+				!document.hidden &&
+				((!isHome && currentTab?.type === 'chat' && currentTab.path === data.chat_id) ||
+					(isHome && currentHomeTab?.type === 'chat' && currentHomeTab.path === data.chat_id));
 
 			if (isViewingThisChat) return;
 
