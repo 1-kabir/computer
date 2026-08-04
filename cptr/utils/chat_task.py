@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 
 from cptr.events import EVENTS, publish_event
@@ -56,6 +57,7 @@ from cptr.utils.tools import (
     disabled_builtin_tool_names,
     execute_tool,
     get_tool_list,
+    resolve_builtin_tool_approval,
     _fn_to_schema,
 )
 from cptr.utils.chat_export import export_chat_to_file
@@ -742,6 +744,7 @@ async def review_tool_approval(
     model: str,
     tool_name: str,
     arguments: dict,
+    approval_policy: str = "review",
 ) -> bool:
     """Return True when Auto mode can run a pending tool without prompting."""
     latest_user = ""
@@ -754,8 +757,9 @@ async def review_tool_approval(
         args_text = args_text[:3500] + "\n...(truncated)"
     configured_model = await Config.get("tool_approval.review.model")
     logger.info(
-        "[tool-approval] auto review start tool=%s active_model=%s review_model=%s args=%s",
+        "[tool-approval] auto review start tool=%s policy=%s active_model=%s review_model=%s args=%s",
         tool_name,
+        approval_policy,
         model,
         configured_model or "<current>",
         args_text[:1000],
@@ -1307,23 +1311,23 @@ def _find_safe_split(messages: list[dict], target_keep: int) -> int:
     """Find a safe split index that doesn't break tool call pairs.
 
     Returns the index where keep_zone starts. Ensures:
+    - Prefer starting compacted history on a user turn
     - Never splits between an assistant tool_call and its tool result
     - keep_zone doesn't start with a tool result message
     - At least 2 messages are kept
     """
     n = len(messages)
-    split = max(2, n - target_keep)
+    split = min(max(2, n - target_keep), max(0, n - 2))
 
-    # Walk forward from the initial split to find a safe boundary
-    while split < n - 1:
-        msg = messages[split]
-        # Don't start keep_zone with a tool result — it needs its preceding assistant
-        if msg.get("role") == "tool":
-            split += 1
-            continue
-        break
+    for idx in range(split, n - 1):
+        if messages[idx].get("role") == "user":
+            return idx
 
-    return min(split, n - 2)  # always keep at least 2
+    # Don't start keep_zone with a tool result; keep its assistant call too.
+    while split > 0 and messages[split].get("role") == "tool":
+        split -= 1
+
+    return split
 
 
 def _summary_checkpoint_message_id(keep_zone: list[dict], fallback: str) -> str:
@@ -1542,6 +1546,7 @@ async def run_chat_task(
 
         chat_obj = await Chat.get_by_id(chat_id)
         chat_params = (chat_obj.meta or {}).get("params", {}) if chat_obj else {}
+        agent_workspace = workspace or str(Path.home())
         messages, loaded_summary = await _load_message_history(chat_id, message_id)
         skill_settings = await get_skill_settings()
         skill_authoring_allowed = _has_prior_real_chat_content(messages, loaded_summary)
@@ -1554,7 +1559,7 @@ async def run_chat_task(
         )
         memory_message, memory_files = _memory_recall_inputs(messages, regeneration_prompt)
         system = await _load_system_prompt(
-            workspace,
+            agent_workspace,
             agent_target.full_model_id,
             user_id=user_id,
             current_message=memory_message,
@@ -1570,7 +1575,7 @@ async def run_chat_task(
             if isinstance(meta_files, list):
                 current_user_files = meta_files
         agent_attachments = await prepare_agent_attachments(
-            workspace=workspace,
+            workspace=agent_workspace,
             chat_id=chat_id,
             message_id=(msg.parent_id if msg and msg.parent_id else message_id),
             files=current_user_files,
@@ -1626,7 +1631,7 @@ async def run_chat_task(
         async for event in runner(
             profile=agent_target.config,
             model=agent_target.model,
-            workspace=workspace,
+            workspace=agent_workspace,
             messages=messages,
             system_prompt=system,
             chat_params=chat_params,
@@ -1925,7 +1930,7 @@ async def run_chat_task(
         # Plan mode: strip write tools, inject prompt as user message (not system, to preserve cache)
         plan_mode = chat_params.get("plan_mode", False)
         if plan_mode:
-            tools = [t for t in tools if not ALL_TOOLS.get(t["name"], {}).get("ask", True)]
+            tools = [t for t in tools if await resolve_builtin_tool_approval(t["name"]) == "allow"]
             tools = [t for t in tools if t["name"] not in {"delegate_task", "update_memory"}]
             tools.append(_fn_to_schema("create_artifact", create_artifact))
             tools.append(ASK_USER_SCHEMA)
@@ -1953,7 +1958,7 @@ async def run_chat_task(
 
         # Tool approval mode: 'ask' | 'auto' | 'full'
         #   ask  = require approval for ALL tools (including reads)
-        #   auto = run ask:false tools; review ask:true tools before prompting
+        #   auto = run allow tools; review review tools before prompting
         #   full = auto-approve everything
         approval_mode = chat_params.get("tool_approval_mode", "auto")
         # Legacy compat: old boolean auto_approve_tools
@@ -1984,8 +1989,9 @@ async def run_chat_task(
 
                 name = item.get("name", "")
                 tool = ALL_TOOLS.get(name)
+                tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
                 should_auto = approval_mode == "full" or (
-                    approval_mode == "auto" and tool and not tool.get("ask", True)
+                    approval_mode == "auto" and tool and tool_approval == "allow"
                 )
                 if (
                     not should_auto
@@ -1999,6 +2005,7 @@ async def run_chat_task(
                         model=model,
                         tool_name=name,
                         arguments=item.get("arguments") or {},
+                        approval_policy=tool_approval,
                     )
                 ):
                     item["approved"] = True
@@ -2492,8 +2499,9 @@ async def run_chat_task(
                         if skill_name:
                             loaded_skill_names.add(skill_name)
                     tool = ALL_TOOLS.get(name)
+                    tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
                     should_auto = approval_mode == "full" or (
-                        approval_mode == "auto" and tool and not tool.get("ask", True)
+                        approval_mode == "auto" and tool and tool_approval == "allow"
                     )
                     if not should_auto:
                         needs_approval = tc

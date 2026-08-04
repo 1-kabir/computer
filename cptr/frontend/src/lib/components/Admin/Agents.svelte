@@ -167,7 +167,7 @@
 		modal = null;
 	}
 
-	function deleteProfile() {
+	async function deleteProfile() {
 		const currentModal = modal;
 		if (currentModal?.mode !== 'edit') {
 			modal = null;
@@ -181,6 +181,7 @@
 			deletedProfile = true;
 		}
 		modal = null;
+		await save();
 	}
 
 	function toggleProfile(index: number) {

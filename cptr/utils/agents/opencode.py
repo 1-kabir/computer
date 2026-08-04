@@ -11,6 +11,7 @@ import socket
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -25,10 +26,33 @@ from cptr.utils.agents.events import (
 from cptr.utils.agents.prompts import turn_prompt_text
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def opencode_server_url_candidates(server_url: str) -> list[str]:
+    server_url = server_url.strip()
+    if not server_url:
+        return []
+    parsed = urlsplit(server_url)
+    in_container = Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+    if not in_container or parsed.hostname not in _LOOPBACK_HOSTS:
+        return [server_url]
+    docker_url = urlunsplit(
+        (
+            parsed.scheme,
+            f"host.docker.internal{':' + str(parsed.port) if parsed.port else ''}",
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+    return [server_url] if docker_url == server_url else [server_url, docker_url]
 
 
 async def _server_url_from_stdout(proc: asyncio.subprocess.Process, port: int) -> str:
@@ -109,6 +133,8 @@ async def _request(
         try:
             response = await client.request(method, f"/{path}", headers=headers, json=json_body)
             response.raise_for_status()
+            if not response.content:
+                return {}
             data = response.json()
             return data if isinstance(data, dict) else {}
         except Exception as exc:  # noqa: BLE001 - try alternate generated route names.
@@ -181,7 +207,13 @@ async def _start_opencode_prompt(
     await _request(
         client,
         "POST",
-        ["session.promptAsync", "session/promptAsync", "session/prompt"],
+        [
+            f"session/{session_id}/prompt_async",
+            f"session/{session_id}/message",
+            "session.promptAsync",
+            "session/promptAsync",
+            "session/prompt",
+        ],
         headers=headers,
         json_body={
             "sessionID": session_id,
@@ -191,15 +223,40 @@ async def _start_opencode_prompt(
     )
 
 
-def _text_from_event(event: dict[str, Any], emitted: dict[str, str]) -> str | None:
+def _role_update_from_event(event: dict[str, Any]) -> tuple[str, str] | None:
+    if event.get("type") != "message.updated":
+        return None
+    props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
+    info = props.get("info") if isinstance(props.get("info"), dict) else {}
+    message_id = info.get("id")
+    role = info.get("role")
+    if isinstance(message_id, str) and isinstance(role, str):
+        return message_id, role
+    return None
+
+
+def _text_from_event(
+    event: dict[str, Any],
+    emitted: dict[str, str],
+    message_roles: dict[str, str],
+) -> str | None:
     event_type = event.get("type")
     props = event.get("properties") if isinstance(event.get("properties"), dict) else {}
     if event_type == "message.part.delta":
+        message_id = props.get("messageID")
+        if isinstance(message_id, str) and message_roles.get(message_id) == "user":
+            return None
         delta = props.get("delta")
+        part_id = props.get("partID")
+        if isinstance(part_id, str) and isinstance(delta, str):
+            emitted[part_id] = f"{emitted.get(part_id, '')}{delta}"
         return delta if isinstance(delta, str) and delta else None
     if event_type == "message.part.updated":
         part = props.get("part") if isinstance(props.get("part"), dict) else {}
         if part.get("type") not in ("text", "reasoning"):
+            return None
+        message_id = part.get("messageID")
+        if isinstance(message_id, str) and message_roles.get(message_id) == "user":
             return None
         part_id = part.get("id")
         text = part.get("text")
@@ -273,66 +330,98 @@ async def run_opencode_agent(
     try:
         async with _opencode_server(profile, workspace) as (server_url, _proc):
             headers = _headers(profile)
-            async with httpx.AsyncClient(base_url=server_url, timeout=None) as client:
-                session_id = _resume_session_id(resume_state)
-                resumed = bool(session_id)
-                if session_id is None:
-                    session_id = await _create_opencode_session(client, headers)
-
-                parsed_model = _parse_model(model)
-                while True:
-                    emitted: dict[str, str] = {}
-                    event_queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
-                    event_task = asyncio.create_task(
-                        _collect_opencode_events(client, headers, session_id, emitted, event_queue)
-                    )
-
-                    prompt = turn_prompt_text(messages, system_prompt, resumed=resumed)
-                    parts = _opencode_parts(prompt, attachments)
-                    try:
-                        try:
-                            await _start_opencode_prompt(
-                                client, headers, session_id, parsed_model, parts
-                            )
-                        except Exception:
-                            if not resumed:
-                                raise
-                            event_task.cancel()
-                            with suppress(asyncio.CancelledError):
-                                await event_task
+            urls = opencode_server_url_candidates(server_url)
+            last_connect_error: Exception | None = None
+            for index, candidate_url in enumerate(urls):
+                try:
+                    async with httpx.AsyncClient(
+                        base_url=candidate_url,
+                        timeout=httpx.Timeout(None, connect=5),
+                    ) as client:
+                        session_id = _resume_session_id(resume_state)
+                        resumed = bool(session_id)
+                        if session_id is None:
                             session_id = await _create_opencode_session(client, headers)
-                            resumed = False
-                            continue
 
+                        parsed_model = _parse_model(model)
                         while True:
-                            item = await event_queue.get()
-                            if item is None:
-                                break
-                            yield item
-                    except asyncio.CancelledError:
-                        with suppress(Exception):
-                            await _request(
-                                client,
-                                "POST",
-                                ["session.abort", "session/abort"],
-                                headers=headers,
-                                json_body={"sessionID": session_id},
+                            emitted: dict[str, str] = {}
+                            event_queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+                            event_task = asyncio.create_task(
+                                _collect_opencode_events(
+                                    client, headers, session_id, emitted, event_queue
+                                )
                             )
-                        raise
-                    finally:
-                        event_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await event_task
-                    break
 
-                yield AgentDone(
-                    resume_state={
-                        "profile_id": profile["id"],
-                        "session_id": session_id,
-                        "workspace": workspace,
-                        "model": model,
-                    }
-                )
+                            prompt = turn_prompt_text(messages, system_prompt, resumed=resumed)
+                            parts = _opencode_parts(prompt, attachments)
+                            try:
+                                try:
+                                    await _start_opencode_prompt(
+                                        client, headers, session_id, parsed_model, parts
+                                    )
+                                except Exception:
+                                    if not resumed:
+                                        raise
+                                    event_task.cancel()
+                                    with suppress(asyncio.CancelledError):
+                                        await event_task
+                                    session_id = await _create_opencode_session(client, headers)
+                                    resumed = False
+                                    continue
+
+                                while True:
+                                    item = await event_queue.get()
+                                    if item is None:
+                                        break
+                                    yield item
+                            except asyncio.CancelledError:
+                                with suppress(Exception):
+                                    await _request(
+                                        client,
+                                        "POST",
+                                        [
+                                            f"session/{session_id}/abort",
+                                            "session.abort",
+                                            "session/abort",
+                                        ],
+                                        headers=headers,
+                                        json_body={"sessionID": session_id},
+                                    )
+                                raise
+                            finally:
+                                event_task.cancel()
+                                with suppress(asyncio.CancelledError):
+                                    await event_task
+                            break
+
+                        yield AgentDone(
+                            resume_state={
+                                "profile_id": profile["id"],
+                                "session_id": session_id,
+                                "workspace": workspace,
+                                "model": model,
+                            }
+                        )
+                    return
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    last_connect_error = exc
+                    if index < len(urls) - 1:
+                        continue
+                    if len(urls) > 1:
+                        port = urlsplit(server_url).port or 4096
+                        raise RuntimeError(
+                            "Unable to connect to OpenCode from Docker. If OpenCode is running "
+                            "on the host, start it with "
+                            f"`opencode serve --hostname 0.0.0.0 --port {port}` and set the "
+                            f"OpenCode Server URL to `http://host.docker.internal:{port}`. "
+                            "On Linux Docker, add "
+                            "`--add-host=host.docker.internal:host-gateway` if that hostname "
+                            "is unavailable."
+                        ) from exc
+                    raise
+            if last_connect_error:
+                raise last_connect_error
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - surfaced in chat.
@@ -346,6 +435,7 @@ async def _collect_opencode_events(
     emitted: dict[str, str],
     queue: asyncio.Queue[AgentEvent | None],
 ) -> None:
+    message_roles: dict[str, str] = {}
     try:
         for path in ("event.subscribe", "event/subscribe", "event"):
             try:
@@ -367,7 +457,10 @@ async def _collect_opencode_events(
                             )
                             if props.get("sessionID") != session_id:
                                 continue
-                            text = _text_from_event(event, emitted)
+                            role_update = _role_update_from_event(event)
+                            if role_update:
+                                message_roles[role_update[0]] = role_update[1]
+                            text = _text_from_event(event, emitted, message_roles)
                             if text:
                                 await queue.put(AgentTextDelta(text))
                             tool = _tool_from_event(event)

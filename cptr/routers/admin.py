@@ -477,9 +477,7 @@ class UpdateModelConfigRequest(BaseModel):
 
 
 @router.put("/models/{model_id:path}/config")
-async def update_model_config(
-    model_id: str, body: UpdateModelConfigRequest, request: Request
-):
+async def update_model_config(model_id: str, body: UpdateModelConfigRequest, request: Request):
     """Update config for a specific model (or '*' for global defaults)."""
     require_admin(request)
     all_config = await Config.get(CONFIG_KEY_CHAT_MODELS) or {}
@@ -530,6 +528,48 @@ def _mask_tool_server(server: dict) -> dict:
         key = masked["key"]
         masked["key"] = key[:4] + "****" + key[-4:] if len(key) > 8 else "****"
     return masked
+
+
+@router.get("/tools/approval")
+async def get_tool_approval(request: Request):
+    """Return built-in tool approval defaults for the Chat settings UI."""
+    require_admin(request)
+    from cptr.utils.tools import (
+        ALL_TOOLS,
+        BUILTIN_TOOL_GROUPS,
+        normalize_tool_approval,
+    )
+
+    raw_default = await Config.get("tool_approval.default_builtin_approval")
+    raw_overrides = await Config.get("tool_approval.builtin_tools") or {}
+    overrides = {}
+    if isinstance(raw_overrides, dict):
+        overrides = {
+            name: policy
+            for name, value in raw_overrides.items()
+            if (policy := normalize_tool_approval(value))
+        }
+
+    groups = []
+    for group_id, names in BUILTIN_TOOL_GROUPS.items():
+        tools = []
+        for name in names:
+            tool = ALL_TOOLS.get(name)
+            if tool:
+                tools.append(
+                    {
+                        "name": name,
+                        "default_approval": normalize_tool_approval(tool.get("approval")),
+                    }
+                )
+        if tools:
+            groups.append({"id": group_id, "tools": tools})
+
+    return {
+        "default_approval": normalize_tool_approval(raw_default) or "review",
+        "overrides": overrides,
+        "groups": groups,
+    }
 
 
 @router.get("/tools/servers")

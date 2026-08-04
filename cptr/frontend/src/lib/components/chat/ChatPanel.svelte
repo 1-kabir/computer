@@ -1721,6 +1721,11 @@
 				showTtsFailure(err?.message || 'playback failed');
 			}
 		} finally {
+			if (generation === ttsGeneration && ttsObjectUrl) {
+				URL.revokeObjectURL(ttsObjectUrl);
+				ttsObjectUrl = null;
+			}
+			if (generation === ttsGeneration) ttsAudio = null;
 			if (generation === ttsGeneration) ttsPlaying = false;
 			if (generation === ttsGeneration) speakingMessageId = null;
 			if (generation === ttsGeneration) ttsStopRequested = false;

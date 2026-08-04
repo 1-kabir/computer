@@ -1676,6 +1676,15 @@ class ChromeViewerManager:
         await viewer.controller_cdp.close()
         await viewer.host.close_target(viewer.target_id)
         await viewer.host.close_target(viewer.controller_id)
+        if viewer.host.source == "managed":
+            has_managed_viewers = any(
+                item.session.owner == owner and item.host.source == "managed"
+                for item in self.viewers.values()
+            )
+            if not has_managed_viewers:
+                host = self.hosts.pop((owner, ""), None)
+                if host:
+                    await host.close()
         return True
 
     async def clear_managed_profile(self, owner: str) -> list[str]:

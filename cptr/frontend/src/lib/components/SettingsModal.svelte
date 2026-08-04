@@ -5,6 +5,7 @@
 	import General from './Settings/General.svelte';
 	import Notifications from './Settings/Notifications.svelte';
 	import Appearance from './Settings/Appearance.svelte';
+	import Usage from './Settings/Usage.svelte';
 	import Memory from './Settings/Memory.svelte';
 	import PWA from './Settings/PWA.svelte';
 	import Account from './Settings/Account.svelte';
@@ -14,6 +15,7 @@
 	import Agents from './Admin/Agents.svelte';
 	import Models from './Admin/Models.svelte';
 	import Chat from './Admin/Chat.svelte';
+	import Tools from './Admin/Tools.svelte';
 	import Git from './Admin/Git.svelte';
 	import Skills from './Admin/Skills.svelte';
 	import Messaging from './Admin/Messaging.svelte';
@@ -31,6 +33,7 @@
 		| 'general'
 		| 'notifications'
 		| 'appearance'
+		| 'usage'
 		| 'memory'
 		| 'pwa'
 		| 'keyboard'
@@ -40,6 +43,7 @@
 		| 'agents'
 		| 'models'
 		| 'chat'
+		| 'tools'
 		| 'git'
 		| 'skills'
 		| 'messaging'
@@ -71,6 +75,7 @@
 		'agents',
 		'models',
 		'chat',
+		'tools',
 		'git',
 		'messaging',
 		'gateway',
@@ -88,6 +93,7 @@
 		const tabs: SettingsTab[] = [
 			{ id: 'general', label: $t('settings.general'), icon: 'settings' },
 			{ id: 'appearance', label: $t('settings.appearance'), icon: 'sun-light' },
+			{ id: 'usage', label: 'Usage', icon: 'usage' },
 			{ id: 'notifications', label: $t('general.notifications'), icon: 'chat-bubble' },
 			{ id: 'keyboard', label: $t('settings.keyboard'), icon: 'terminal' },
 			{ id: 'account', label: $t('settings.account'), icon: 'user' }
@@ -102,6 +108,7 @@
 		{ id: 'agents', label: $t('admin.agents'), icon: 'terminal' },
 		{ id: 'models', label: $t('admin.models'), icon: 'cube' },
 		{ id: 'chat', label: $t('admin.chat'), icon: 'chat-bubble' },
+		{ id: 'tools', label: $t('admin.tools'), icon: 'terminal' },
 		{ id: 'git', label: $t('admin.git'), icon: 'git-branch' },
 		{ id: 'messaging', label: $t('admin.messaging'), icon: 'chat-bubble' },
 		{ id: 'gateway', label: $t('admin.gateway.tab'), icon: 'gateway' },
@@ -198,6 +205,8 @@
 			<Notifications />
 		{:else if activeTab === 'appearance'}
 			<Appearance />
+		{:else if activeTab === 'usage'}
+			<Usage />
 		{:else if activeTab === 'memory'}
 			<Memory />
 		{:else if activeTab === 'pwa' && showPwaSettings}
@@ -216,6 +225,8 @@
 			<Models />
 		{:else if activeTab === 'chat'}
 			<Chat />
+		{:else if activeTab === 'tools'}
+			<Tools />
 		{:else if activeTab === 'git'}
 			<Git />
 		{:else if activeTab === 'skills'}

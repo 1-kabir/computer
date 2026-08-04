@@ -140,8 +140,18 @@ class SignalAdapter(BaseAdapter):
         return timestamp
 
     async def edit(self, chat_id: str, message_id: str, text: str) -> None:
-        """Signal has no edit API; send the updated text as a new message."""
-        await self.send(chat_id, text)
+        if not self._http:
+            return
+        resp = await self._http.post(
+            f"{self._base_url}/v2/send",
+            json={
+                "message": text[:MAX_MESSAGE_LEN],
+                "number": self._phone,
+                "recipients": [chat_id],
+                "edit_timestamp": int(message_id),
+            },
+        )
+        resp.raise_for_status()
 
     async def send_typing(self, chat_id: str) -> None:
         """Send typing indicator via signal-cli."""

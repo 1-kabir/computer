@@ -21,6 +21,7 @@ from cptr.utils.agents.models import (
     model_id_for_profile,
     normalize_agent_profiles,
 )
+from cptr.utils.agents.opencode import opencode_server_url_candidates
 
 DETECTION_TTL_SECONDS = 30
 CLAUDE_MODEL_FALLBACKS = [
@@ -61,35 +62,58 @@ def _resolve_command(command: str) -> str | None:
 
 def _find_claude_desktop_command() -> str | None:
     if os.name == "nt":
+        roots = []
         appdata = os.environ.get("APPDATA")
-        root = os.path.join(appdata, "Claude", "claude-code") if appdata else None
+        if appdata:
+            roots.append(os.path.join(appdata, "Claude", "claude-code"))
+        localappdata = os.environ.get("LOCALAPPDATA")
+        packages_dir = os.path.join(localappdata, "Packages") if localappdata else None
+        if packages_dir and os.path.isdir(packages_dir):
+            with suppress(OSError):
+                for name in os.listdir(packages_dir):
+                    if name.startswith("Claude_"):
+                        roots.append(
+                            os.path.join(
+                                packages_dir,
+                                name,
+                                "LocalCache",
+                                "Roaming",
+                                "Claude",
+                                "claude-code",
+                            )
+                        )
         relative_paths = (("claude.exe",),)
     else:
-        root = os.path.join(
-            os.path.expanduser("~"),
-            "Library",
-            "Application Support",
-            "Claude",
-            "claude-code",
-        )
+        roots = [
+            os.path.join(
+                os.path.expanduser("~"),
+                "Library",
+                "Application Support",
+                "Claude",
+                "claude-code",
+            )
+        ]
         relative_paths = (
             ("claude.app", "Contents", "MacOS", "claude"),
             ("claude",),
         )
 
     candidates: list[tuple[tuple[int, int, int], str]] = []
-    if root is not None and os.path.isdir(root):
-        for name in os.listdir(root):
-            version_dir = os.path.join(root, name)
-            version = _parse_version_tuple(name)
-            if version is None or not os.path.isdir(version_dir):
-                continue
-            for relative_path in relative_paths:
-                candidate = os.path.join(version_dir, *relative_path)
-                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                    candidates.append((version, candidate))
-                    break
-    return max(candidates)[1] if candidates else None
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        with suppress(OSError):
+            for name in os.listdir(root):
+                version_dir = os.path.join(root, name)
+                version = _parse_version_tuple(name)
+                if version is None or not os.path.isdir(version_dir):
+                    continue
+                for relative_path in relative_paths:
+                    candidate = os.path.join(version_dir, *relative_path)
+                    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                        candidates.append((version, candidate))
+                        break
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
 async def _run_probe(
@@ -433,7 +457,9 @@ async def _probe_cursor_models(command: str, profile: dict[str, Any]) -> list[st
     )
     try:
         await asyncio.wait_for(client.start(), timeout=10)
-        result = await asyncio.wait_for(client.request("cursor/list_available_models", {}), timeout=5)
+        result = await asyncio.wait_for(
+            client.request("cursor/list_available_models", {}), timeout=5
+        )
         models = []
         for item in result.get("models") or []:
             if isinstance(item, dict) and isinstance(item.get("value"), str):
@@ -489,30 +515,42 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
                 env={**env, "OPENCODE_CONFIG_CONTENT": "{}"},
             )
             server_url = await _read_opencode_server_url(proc, port)
-        async with httpx.AsyncClient(base_url=server_url, timeout=5) as client:
-            headers = {}
-            if password:
-                import base64
+        headers = {}
+        if password:
+            import base64
 
-                token = base64.b64encode(f"opencode:{password}".encode()).decode()
-                headers["Authorization"] = f"Basic {token}"
-            providers = await _opencode_json(client, ["provider.list", "provider/list", "provider"], headers)
-            provider_list = providers.get("data") if isinstance(providers.get("data"), dict) else providers
-            connected = set(provider_list.get("connected") or [])
-            all_providers = provider_list.get("all") or []
-            models: list[str] = []
-            for provider in all_providers:
-                if not isinstance(provider, dict):
-                    continue
-                provider_id = provider.get("id")
-                if not isinstance(provider_id, str) or provider_id not in connected:
-                    continue
-                raw_models = provider.get("models")
-                if isinstance(raw_models, dict):
-                    for model_id in raw_models:
-                        if isinstance(model_id, str) and model_id.strip():
-                            models.append(f"{provider_id}/{model_id.strip()}")
-            return models or None
+            token = base64.b64encode(f"opencode:{password}".encode()).decode()
+            headers["Authorization"] = f"Basic {token}"
+        for candidate_url in opencode_server_url_candidates(server_url):
+            try:
+                async with httpx.AsyncClient(base_url=candidate_url, timeout=5) as client:
+                    providers = await _opencode_json(
+                        client, ["provider.list", "provider/list", "provider"], headers
+                    )
+                    provider_list = (
+                        providers.get("data")
+                        if isinstance(providers.get("data"), dict)
+                        else providers
+                    )
+                    connected = set(provider_list.get("connected") or [])
+                    all_providers = provider_list.get("all") or []
+                    models: list[str] = []
+                    for provider in all_providers:
+                        if not isinstance(provider, dict):
+                            continue
+                        provider_id = provider.get("id")
+                        if not isinstance(provider_id, str) or provider_id not in connected:
+                            continue
+                        raw_models = provider.get("models")
+                        if isinstance(raw_models, dict):
+                            for model_id in raw_models:
+                                if isinstance(model_id, str) and model_id.strip():
+                                    models.append(f"{provider_id}/{model_id.strip()}")
+                    if models:
+                        return models
+            except Exception:
+                continue
+        return None
     except Exception:
         return None
     finally:

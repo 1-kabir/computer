@@ -2277,45 +2277,53 @@ async def notify(message: str, target: str = "", title: str = "", *, __context__
 
 # ── Registry ────────────────────────────────────────────────
 
+ToolApprovalPolicy = Literal["allow", "review"]
+TOOL_APPROVAL_POLICIES = {"allow", "review"}
+
+
+def normalize_tool_approval(value: Any) -> ToolApprovalPolicy | None:
+    return value if isinstance(value, str) and value in TOOL_APPROVAL_POLICIES else None
+
+
 TOOLS: dict[str, dict] = {
     # Auto mode runs these without asking.
-    "read_file": {"fn": read_file, "ask": False},
-    "list_directory": {"fn": list_directory, "ask": False},
-    "search_files": {"fn": search_files, "ask": False},
-    "check_task": {"fn": check_task, "ask": False},
-    "web_search": {"fn": web_search, "ask": False},
-    "read_url": {"fn": read_url, "ask": False},
-    "search_chats": {"fn": search_chats, "ask": False},
-    "list_automations": {"fn": list_automations, "ask": False},
-    "view_skill": {"fn": view_skill, "ask": False},
-    "update_tasks": {"fn": update_tasks, "ask": False},
-    # Auto mode reviews these first, then asks if denied or unclear.
-    "create_file": {"fn": create_file, "ask": True},
-    "display_file": {"fn": display_file, "ask": True},
-    "edit_file": {"fn": edit_file, "ask": True},
-    "multi_edit_file": {"fn": multi_edit_file, "ask": True},
-    "write_file": {"fn": write_file, "ask": True},
-    "run_command": {"fn": run_command, "ask": True},
-    "send_input": {"fn": send_input, "ask": True},
-    "kill_task": {"fn": kill_task, "ask": True},
-    "create_automation": {"fn": create_automation, "ask": True},
-    "update_automation": {"fn": update_automation, "ask": True},
-    "toggle_automation": {"fn": toggle_automation, "ask": True},
-    "delete_automation": {"fn": delete_automation, "ask": True},
-    "notify": {"fn": notify, "ask": True},
-    "image_generate": {"fn": image_generate, "ask": True},
-    "manage_skill": {"fn": manage_skill, "ask": True},
-    "update_memory": {"fn": update_memory, "ask": False},
+    "read_file": {"fn": read_file, "approval": "allow"},
+    "list_directory": {"fn": list_directory, "approval": "allow"},
+    "search_files": {"fn": search_files, "approval": "allow"},
+    "check_task": {"fn": check_task, "approval": "allow"},
+    "web_search": {"fn": web_search, "approval": "allow"},
+    "read_url": {"fn": read_url, "approval": "allow"},
+    "search_chats": {"fn": search_chats, "approval": "allow"},
+    "list_automations": {"fn": list_automations, "approval": "allow"},
+    "view_skill": {"fn": view_skill, "approval": "allow"},
+    "update_tasks": {"fn": update_tasks, "approval": "allow"},
+    # Missing approval inherits tool_approval.default_builtin_approval.
+    "create_file": {"fn": create_file},
+    "display_file": {"fn": display_file},
+    "edit_file": {"fn": edit_file},
+    "multi_edit_file": {"fn": multi_edit_file},
+    "write_file": {"fn": write_file},
+    "run_command": {"fn": run_command},
+    "send_input": {"fn": send_input},
+    "kill_task": {"fn": kill_task},
+    "create_automation": {"fn": create_automation},
+    "update_automation": {"fn": update_automation},
+    "toggle_automation": {"fn": toggle_automation},
+    "delete_automation": {"fn": delete_automation},
+    "notify": {"fn": notify},
+    "image_generate": {"fn": image_generate},
+    "manage_skill": {"fn": manage_skill},
+    "update_memory": {"fn": update_memory, "approval": "allow"},
 }
 
 # Browser tools — conditionally included in schemas based on browser.enabled
 BROWSER_TOOLS: dict[str, dict] = {
-    "browser_navigate": {"fn": browser_navigate, "ask": True},
-    "browser_snapshot": {"fn": browser_snapshot, "ask": False},
-    "browser_click": {"fn": browser_click, "ask": True},
-    "browser_type": {"fn": browser_type, "ask": True},
-    "browser_screenshot": {"fn": browser_screenshot, "ask": False},
-    "browser_evaluate": {"fn": browser_evaluate, "ask": True},
+    "browser_navigate": {"fn": browser_navigate},
+    "browser_snapshot": {"fn": browser_snapshot, "approval": "allow"},
+    "browser_click": {"fn": browser_click},
+    "browser_type": {"fn": browser_type},
+    "browser_screenshot": {"fn": browser_screenshot, "approval": "allow"},
+    "browser_evaluate": {"fn": browser_evaluate},
 }
 
 
@@ -2668,12 +2676,34 @@ async def _run_subagent_chat(
 
 
 SUBAGENT_TOOLS: dict[str, dict] = {
-    "delegate_task": {"fn": delegate_task, "ask": False},
-    "timer": {"fn": timer, "ask": True},
+    "delegate_task": {"fn": delegate_task, "approval": "allow"},
+    "timer": {"fn": timer},
 }
 
 # Combined lookup for execution and approval (always available regardless of config)
 ALL_TOOLS: dict[str, dict] = {**TOOLS, **BROWSER_TOOLS, **SUBAGENT_TOOLS}
+
+
+async def resolve_builtin_tool_approval(name: str) -> ToolApprovalPolicy:
+    """Resolve built-in tool approval. Unknown tools stay conservative."""
+    tool = ALL_TOOLS.get(name)
+    if tool is None:
+        return "review"
+
+    from cptr.models import Config
+
+    overrides = await Config.get("tool_approval.builtin_tools") or {}
+    if isinstance(overrides, dict):
+        override = normalize_tool_approval(overrides.get(name))
+        if override:
+            return override
+
+    registry = normalize_tool_approval(tool.get("approval"))
+    if registry:
+        return registry
+
+    default = normalize_tool_approval(await Config.get("tool_approval.default_builtin_approval"))
+    return default or "review"
 
 
 BUILTIN_TOOL_GROUPS: dict[str, tuple[str, ...]] = {

@@ -62,6 +62,7 @@
 	let fitAddon: FitAddon | null = null;
 	let ws: WebSocket | null = null;
 	let resizeObserver: ResizeObserver | null = null;
+	let themeObserver: MutationObserver | null = null;
 	let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	let destroyed = false;
@@ -262,12 +263,12 @@
 		});
 
 		// Watch for theme changes
-		const observer = new MutationObserver(() => {
+		themeObserver = new MutationObserver(() => {
 			if (term) {
 				term.options.theme = terminalTheme();
 			}
 		});
-		observer.observe(document.documentElement, {
+		themeObserver.observe(document.documentElement, {
 			attributes: true,
 			attributeFilter: ['class', 'style']
 		});
@@ -506,8 +507,14 @@
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		if (hapticTimer) clearTimeout(hapticTimer);
 		resizeObserver?.disconnect();
+		themeObserver?.disconnect();
 		releaseWakeLock();
-		ws?.close();
+		if (ws) {
+			ws.onmessage = null;
+			ws.onclose = null;
+			ws.onerror = null;
+			ws.close();
+		}
 		term?.dispose();
 	});
 </script>
