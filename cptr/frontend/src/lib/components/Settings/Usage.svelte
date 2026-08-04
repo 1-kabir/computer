@@ -120,7 +120,7 @@
 				)
 			: Math.min(totalHeatmapColumns, DEFAULT_HEATMAP_COLUMNS)
 	);
-	const visibleHeatmapColumns = $derived(maxHeatmapColumns);
+	const visibleHeatmapColumns = $derived(Math.min(totalHeatmapColumns, maxHeatmapColumns));
 	const heatmapCells = $derived(buildHeatmapCells(heatmapData, visibleHeatmapColumns));
 	const heatmapColumns = $derived(Math.max(Math.ceil(heatmapCells.length / 7), 1));
 	const heatmapGridWidth = $derived(
@@ -136,7 +136,7 @@
 	async function loadUsage() {
 		loading = true;
 		try {
-			usage = await getUsage();
+			usage = await getUsage(730);
 		} catch {
 			usage = null;
 			toast.error(tr('usage.failedToLoad'));
@@ -169,15 +169,10 @@
 	}
 
 	function buildHeatmapCells(data: UsageHeatmapEntry[], visibleColumns: number) {
-		const targetCells = Math.max(7, visibleColumns * 7);
-		if (data.length === 0) return Array.from({ length: targetCells }, () => null);
-		const cells = data.slice(-targetCells);
+		if (data.length === 0) return [];
+		const cells = data.slice(-Math.max(7, visibleColumns * 7));
 		const trailingBlanks = Array.from({ length: (7 - (cells.length % 7)) % 7 }, () => null);
-		const leadingBlanks = Array.from(
-			{ length: Math.max(0, targetCells - cells.length - trailingBlanks.length) },
-			() => null
-		);
-		return [...leadingBlanks, ...cells, ...trailingBlanks];
+		return [...cells, ...trailingBlanks];
 	}
 
 	function buildMonthLabels(cells: HeatmapCell[], columns: number): MonthLabel[] {
@@ -369,7 +364,7 @@
 										use:tooltip={tooltipFor(entry)}
 									></div>
 								{:else}
-									<div class="h-full w-full rounded-[2px] bg-gray-100 dark:bg-gray-800"></div>
+									<div class="h-full w-full"></div>
 								{/if}
 							{/each}
 						</div>
