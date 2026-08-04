@@ -120,7 +120,7 @@
 				)
 			: Math.min(totalHeatmapColumns, DEFAULT_HEATMAP_COLUMNS)
 	);
-	const visibleHeatmapColumns = $derived(Math.min(totalHeatmapColumns, maxHeatmapColumns));
+	const visibleHeatmapColumns = $derived(maxHeatmapColumns);
 	const heatmapCells = $derived(buildHeatmapCells(heatmapData, visibleHeatmapColumns));
 	const heatmapColumns = $derived(Math.max(Math.ceil(heatmapCells.length / 7), 1));
 	const heatmapGridWidth = $derived(
@@ -169,10 +169,15 @@
 	}
 
 	function buildHeatmapCells(data: UsageHeatmapEntry[], visibleColumns: number) {
-		if (data.length === 0) return [];
-		const cells = data.slice(-Math.max(7, visibleColumns * 7));
+		const targetCells = Math.max(7, visibleColumns * 7);
+		if (data.length === 0) return Array.from({ length: targetCells }, () => null);
+		const cells = data.slice(-targetCells);
 		const trailingBlanks = Array.from({ length: (7 - (cells.length % 7)) % 7 }, () => null);
-		return [...cells, ...trailingBlanks];
+		const leadingBlanks = Array.from(
+			{ length: Math.max(0, targetCells - cells.length - trailingBlanks.length) },
+			() => null
+		);
+		return [...leadingBlanks, ...cells, ...trailingBlanks];
 	}
 
 	function buildMonthLabels(cells: HeatmapCell[], columns: number): MonthLabel[] {
@@ -279,8 +284,8 @@
 		</div>
 	{:else}
 		<div class="scrollbar-hover min-h-0 flex-1 overflow-y-auto pr-1.5">
-			<section class="border-t border-gray-100 pt-3 dark:border-white/6">
-				<h3 class="mb-3 text-xs text-gray-400 dark:text-gray-600">{tr('usage.overview')}</h3>
+			<section class="w-full">
+				<h3 class="mb-2 text-xs text-gray-600 dark:text-gray-400">{tr('usage.overview')}</h3>
 				<div class="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-5">
 					<div>
 						<div class="text-sm font-medium text-gray-900 dark:text-white">
@@ -364,7 +369,7 @@
 										use:tooltip={tooltipFor(entry)}
 									></div>
 								{:else}
-									<div class="h-full w-full"></div>
+									<div class="h-full w-full rounded-[2px] bg-gray-100 dark:bg-gray-800"></div>
 								{/if}
 							{/each}
 						</div>
@@ -398,17 +403,17 @@
 			</section>
 
 			{#if !hasUsage}
-				<section class="mt-5 border-t border-gray-100 pt-3 dark:border-white/6">
-					<h3 class="mb-2 text-xs text-gray-400 dark:text-gray-600">{tr('usage.activity')}</h3>
+				<section class="mt-4 w-full">
+					<h3 class="mb-2 text-xs text-gray-600 dark:text-gray-400">{tr('usage.activity')}</h3>
 					<div class="text-xs text-gray-500 dark:text-gray-400">{tr('usage.noData')}</div>
 				</section>
 			{:else}
-				<section class="mt-5 border-t border-gray-100 pt-3 dark:border-white/6">
-					<h3 class="mb-1 text-xs text-gray-400 dark:text-gray-600">
+				<section class="mt-4 w-full">
+					<h3 class="mb-2 text-xs text-gray-600 dark:text-gray-400">
 						{tr('usage.activityInsights')}
 					</h3>
-					<div class="divide-y divide-gray-100 dark:divide-white/6">
-						<div class="flex min-h-9 items-center justify-between gap-3">
+					<div class="flex flex-col gap-2.5">
+						<div class="flex items-center justify-between gap-2.5">
 							<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 								>{tr('usage.models')}</span
 							>
@@ -416,7 +421,7 @@
 								>{usage.totals.models_used.toLocaleString()}</span
 							>
 						</div>
-						<div class="flex min-h-9 items-center justify-between gap-3">
+						<div class="flex items-center justify-between gap-2.5">
 							<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 								>{tr('usage.averageTokensPerChat')}</span
 							>
@@ -424,7 +429,7 @@
 								>{formatNumber(usage.insights.average_tokens_per_chat)}</span
 							>
 						</div>
-						<div class="flex min-h-9 items-center justify-between gap-3">
+						<div class="flex items-center justify-between gap-2.5">
 							<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 								>{tr('usage.averageMessagesPerActiveDay')}</span
 							>
@@ -432,7 +437,7 @@
 								>{usage.insights.average_messages_per_active_day.toLocaleString()}</span
 							>
 						</div>
-						<div class="flex min-h-9 items-center justify-between gap-3">
+						<div class="flex items-center justify-between gap-2.5">
 							<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 								>{tr('usage.userMessages')}</span
 							>
@@ -441,7 +446,7 @@
 									.user_message_share}%</span
 							>
 						</div>
-						<div class="flex min-h-9 items-center justify-between gap-3">
+						<div class="flex items-center justify-between gap-2.5">
 							<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 								>{tr('usage.assistantMessages')}</span
 							>
@@ -450,7 +455,7 @@
 									.assistant_message_share}%</span
 							>
 						</div>
-						<div class="flex min-h-9 items-center justify-between gap-3">
+						<div class="flex items-center justify-between gap-2.5">
 							<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 								>{tr('usage.totalChats')}</span
 							>
@@ -461,14 +466,14 @@
 					</div>
 				</section>
 
-				<section class="mt-5 border-t border-gray-100 pt-3 dark:border-white/6">
-					<h3 class="mb-1 text-xs text-gray-400 dark:text-gray-600">{tr('usage.topModels')}</h3>
+				<section class="mt-4 w-full">
+					<h3 class="mb-2 text-xs text-gray-600 dark:text-gray-400">{tr('usage.topModels')}</h3>
 					{#if usage.top_models.length === 0}
 						<div class="text-xs text-gray-500 dark:text-gray-400">{tr('usage.noModelUsage')}</div>
 					{:else}
-						<div class="divide-y divide-gray-100 dark:divide-white/6">
+						<div class="flex flex-col gap-2.5">
 							{#each usage.top_models as model}
-								<div class="flex min-h-9 items-center justify-between gap-3">
+								<div class="flex items-center justify-between gap-2.5">
 									<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 										>{modelName(model.model_id)}</span
 									>
@@ -483,13 +488,13 @@
 				</section>
 
 				{#if usage.top_tools.length > 0}
-					<section class="mt-5 border-t border-gray-100 pt-3 dark:border-white/6">
-						<h3 class="mb-1 text-xs text-gray-400 dark:text-gray-600">
+					<section class="mt-4 w-full">
+						<h3 class="mb-2 text-xs text-gray-600 dark:text-gray-400">
 							{tr('usage.mostUsedTools')}
 						</h3>
-						<div class="divide-y divide-gray-100 dark:divide-white/6">
+						<div class="flex flex-col gap-2.5">
 							{#each usage.top_tools as tool}
-								<div class="flex min-h-9 items-center justify-between gap-3">
+								<div class="flex items-center justify-between gap-2.5">
 									<span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-400"
 										>{tool.name}</span
 									>

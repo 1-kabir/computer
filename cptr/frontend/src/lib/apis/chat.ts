@@ -110,6 +110,7 @@ export interface UsageResponse {
 	cumulative_heatmap: UsageHeatmapEntry[];
 	top_models: { model_id: string; messages: number; total_tokens: number }[];
 	top_tools: { name: string; count: number }[];
+	period: { start_date: number; end_date: number; days: number };
 }
 
 // ── Queries ─────────────────────────────────────────────────
