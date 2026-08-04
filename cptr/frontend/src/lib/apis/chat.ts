@@ -131,7 +131,7 @@ export const getChat = (chatId: string, modelId?: string) => {
 	return fetchJSON<ChatDetail>(`/api/chats/${chatId}${suffix}`);
 };
 
-export const getUsage = (days = 730) => fetchJSON<UsageResponse>(`/api/chats/usage?days=${days}`);
+export const getUsage = () => fetchJSON<UsageResponse>('/api/chats/usage');
 
 export const deleteChat = (chatId: string) =>
 	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}`, { method: 'DELETE' });

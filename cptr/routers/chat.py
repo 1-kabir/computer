@@ -329,7 +329,7 @@ async def get_models(request: Request):
 
 
 @router.get("/usage")
-async def get_usage(request: Request, days: int = Query(730, ge=7, le=732)):
+async def get_usage(request: Request, days: int | None = Query(None, ge=7, le=732)):
     """Aggregate personal chat usage for the settings Usage tab."""
     user_id = _get_user(request)
 
@@ -402,6 +402,7 @@ async def get_usage(request: Request, days: int = Query(730, ge=7, le=732)):
         rows.append((message, day_date, tokens))
 
     today = datetime.now(timezone.utc).date()
+    days = days or 730
     start = today - timedelta(days=days - 1)
     period_start = int(
         datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc).timestamp()

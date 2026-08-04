@@ -136,7 +136,7 @@
 	async function loadUsage() {
 		loading = true;
 		try {
-			usage = await getUsage(730);
+			usage = await getUsage();
 		} catch {
 			usage = null;
 			toast.error(tr('usage.failedToLoad'));
