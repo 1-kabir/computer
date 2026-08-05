@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import logging
 import secrets
-import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -39,7 +38,12 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _automation_dict(a: Automation, last_run: AutomationRun | None = None, next_runs: list[int] | None = None, webhook_url: str | None = None) -> dict:
+def _automation_dict(
+    a: Automation,
+    last_run: AutomationRun | None = None,
+    next_runs: list[int] | None = None,
+    webhook_url: str | None = None,
+) -> dict:
     """Serialize an Automation to a response dict."""
     meta = a.meta or {}
     has_webhook = bool(meta.get("webhook_token"))
@@ -104,10 +108,7 @@ async def list_automations(
     latest_runs = await AutomationRun.get_latest_batch(ids) if ids else {}
 
     return {
-        "items": [
-            _automation_dict(a, last_run=latest_runs.get(a.id))
-            for a in items
-        ],
+        "items": [_automation_dict(a, last_run=latest_runs.get(a.id)) for a in items],
         "total": total,
     }
 
@@ -125,7 +126,7 @@ class CreateAutomationRequest(BaseModel):
 
 
 @router.post("")
-async def create_automation(body: CreateAutomationRequest, request: Request):
+async def create_automation(request: Request, body: CreateAutomationRequest):
     user_id = _get_user(request)
 
     try:
@@ -155,7 +156,7 @@ async def create_automation(body: CreateAutomationRequest, request: Request):
 
 
 @router.get("/{automation_id}")
-async def get_automation(automation_id: str, request: Request):
+async def get_automation(request: Request, automation_id: str):
     user_id = _get_user(request)
     automation = await Automation.get_by_id(automation_id)
     if not automation or automation.user_id != user_id:
@@ -182,7 +183,7 @@ class UpdateAutomationRequest(BaseModel):
 
 
 @router.post("/{automation_id}")
-async def update_automation(automation_id: str, body: UpdateAutomationRequest, request: Request):
+async def update_automation(request: Request, automation_id: str, body: UpdateAutomationRequest):
     user_id = _get_user(request)
     automation = await Automation.get_by_id(automation_id)
     if not automation or automation.user_id != user_id:
@@ -217,7 +218,7 @@ async def update_automation(automation_id: str, body: UpdateAutomationRequest, r
 
 
 @router.post("/{automation_id}/toggle")
-async def toggle_automation(automation_id: str, request: Request):
+async def toggle_automation(request: Request, automation_id: str):
     user_id = _get_user(request)
     automation = await Automation.get_by_id(automation_id)
     if not automation or automation.user_id != user_id:
@@ -255,6 +256,7 @@ async def run_automation_now(
             body = await request.json()
             if body:
                 import json
+
                 webhook_payload = json.dumps(body, indent=2)
         except Exception:
             pass
@@ -276,7 +278,7 @@ async def run_automation_now(
 
 
 @router.delete("/{automation_id}")
-async def delete_automation(automation_id: str, request: Request):
+async def delete_automation(request: Request, automation_id: str):
     user_id = _get_user(request)
     automation = await Automation.get_by_id(automation_id)
     if not automation or automation.user_id != user_id:
@@ -309,7 +311,7 @@ async def get_automation_runs(
 
 
 @router.post("/{automation_id}/webhook")
-async def generate_webhook(automation_id: str, request: Request):
+async def generate_webhook(request: Request, automation_id: str):
     """Generate or regenerate a webhook token for this automation.
 
     Returns the plaintext webhook URL once. The token is stored as a
@@ -333,7 +335,7 @@ async def generate_webhook(automation_id: str, request: Request):
 
 
 @router.delete("/{automation_id}/webhook")
-async def revoke_webhook(automation_id: str, request: Request):
+async def revoke_webhook(request: Request, automation_id: str):
     """Revoke the webhook token for this automation."""
     user_id = _get_user(request)
     automation = await Automation.get_by_id(automation_id)
