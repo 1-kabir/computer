@@ -8,13 +8,16 @@ single-user model. Not safe for shared or public instances. See README.md.
 from __future__ import annotations
 
 import io
+import mimetypes
+import os
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File as FastAPIFile, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from cptr.utils.identity import IdentityUnavailable, expand_user_path, identity_for_request
 from cptr.utils.runtime import Runtime
 from cptr.utils.runtime import MATCH_PAGE_SIZE, FileError
 
@@ -93,6 +96,36 @@ class DeleteRequest(BaseModel):
 
 class ArchiveRequest(BaseModel):
     paths: list[str]
+
+
+async def send_file(request: Request, path: str, *, download: bool = False):
+    try:
+        identity = await identity_for_request(request)
+    except IdentityUnavailable as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    if not identity.is_pam or identity.uid == os.geteuid():
+        target = expand_user_path(path, identity).resolve()
+        if not target.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        if not target.is_file():
+            raise HTTPException(status_code=400, detail=f"Not a file: {path}")
+        media_type, _ = mimetypes.guess_type(str(target))
+        return FileResponse(
+            str(target),
+            filename=target.name if download else None,
+            media_type="application/octet-stream" if download else media_type or "application/octet-stream",
+        )
+
+    try:
+        result = await Runtime.read_bytes(identity, path)
+    except FileError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return StreamingResponse(
+        io.BytesIO(result["data"]),
+        media_type="application/octet-stream" if download else result.get("media_type") or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{result["name"]}"'} if download else None,
+    )
 
 
 @router.get("", response_model=DirectoryListing)
@@ -202,14 +235,7 @@ async def view_file(
     request: Request,
     path: str = Query(..., description="Absolute path to file"),
 ):
-    try:
-        result = await Runtime.read_bytes(request, path)
-    except FileError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return StreamingResponse(
-        io.BytesIO(result["data"]),
-        media_type=result.get("media_type") or "application/octet-stream",
-    )
+    return await send_file(request, path)
 
 
 @router.get("/download")
@@ -217,15 +243,7 @@ async def download_file(
     request: Request,
     path: str = Query(..., description="Absolute path to file"),
 ):
-    try:
-        result = await Runtime.read_bytes(request, path)
-    except FileError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return StreamingResponse(
-        io.BytesIO(result["data"]),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{result["name"]}"'},
-    )
+    return await send_file(request, path, download=True)
 
 
 @router.post("/archive")
@@ -244,11 +262,4 @@ async def archive_files(request: Request, req: ArchiveRequest):
 @router.get("/serve/{file_path:path}")
 async def serve_static(request: Request, file_path: str):
     path = str(Path(file_path if len(file_path) >= 2 and file_path[1] == ":" else "/" + file_path))
-    try:
-        result = await Runtime.read_bytes(request, path)
-    except FileError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    return StreamingResponse(
-        io.BytesIO(result["data"]),
-        media_type=result.get("media_type") or "application/octet-stream",
-    )
+    return await send_file(request, path)

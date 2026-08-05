@@ -560,7 +560,7 @@ export async function loadPreferences(): Promise<void> {
 				listSessions().catch(() => []),
 				listBrowserSessions().catch(() => [])
 			]);
-			const aliveTerminals = new Set(terminalIds);
+			const aliveTerminals = new Set(terminalIds.map((session) => session.session_id));
 			const aliveBrowsers = new Set(browserIds);
 			let groups = savedHomeState.groups
 				.map((group) => {
