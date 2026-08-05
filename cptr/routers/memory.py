@@ -74,13 +74,13 @@ async def get_memory(request: Request, workspace: str = Query("")):
 
 
 @router.put("/config")
-async def put_memory_settings(body: MemorySettingsRequest, request: Request):
+async def put_memory_settings(request: Request, body: MemorySettingsRequest):
     _require_admin(request)
     return {"settings": await save_memory_settings(body.settings)}
 
 
 @router.post("/update")
-async def update_memory(body: MemoryUpdateRequest, request: Request):
+async def update_memory(request: Request, body: MemoryUpdateRequest):
     user_id = _get_user(request)
     return await remember(
         user_id=user_id,
@@ -91,7 +91,7 @@ async def update_memory(body: MemoryUpdateRequest, request: Request):
 
 
 @router.post("/search")
-async def search_memory(body: MemorySearchRequest, request: Request):
+async def search_memory(request: Request, body: MemorySearchRequest):
     user_id = _get_user(request)
     return await search_memory_state(
         user_id=user_id,
@@ -146,6 +146,6 @@ async def get_memory_file(
 
 
 @router.post("/review")
-async def review_memory(body: MemoryReviewRequest, request: Request):
+async def review_memory(request: Request, body: MemoryReviewRequest):
     user_id = _get_user(request)
     return await review_memory_vault(user_id, body.workspace)
