@@ -223,8 +223,21 @@ class PiRpcClient:
 
     async def _read_stderr(self) -> None:
         assert self.proc and self.proc.stderr
-        while line := await self.proc.stderr.readline():
-            self.stderr_tail.append(line.decode(errors="replace").rstrip())
+        while True:
+            try:
+                line = await self.proc.stderr.readline()
+            except ValueError as exc:
+                self._append_stderr(f"stderr line too long: {exc}", truncated=True)
+                continue
+            if not line:
+                break
+            self._append_stderr(line.decode(errors="replace"))
+
+    def _append_stderr(self, text: str, *, truncated: bool = False) -> None:
+        text = text.strip()
+        if text:
+            suffix = " [truncated]" if truncated else ""
+            self.stderr_tail.append(f"{text[:2000]}{suffix}")
 
     def _fail_pending(self, message: str) -> None:
         for future in self.pending.values():

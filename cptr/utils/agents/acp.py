@@ -188,8 +188,12 @@ class AcpClient:
 
     async def _stderr_loop(self) -> None:
         assert self.proc is not None and self.proc.stderr is not None
-        while await self.proc.stderr.readline():
-            pass
+        while True:
+            try:
+                if not await self.proc.stderr.readline():
+                    break
+            except ValueError:
+                continue
 
     async def _handle_message(self, message: dict[str, Any]) -> None:
         if (

@@ -108,8 +108,12 @@ async def _opencode_server(profile: dict[str, Any], workspace: str):
 
 async def _drain_stderr(proc: asyncio.subprocess.Process) -> None:
     assert proc.stderr is not None
-    while await proc.stderr.readline():
-        pass
+    while True:
+        try:
+            if not await proc.stderr.readline():
+                break
+        except ValueError:
+            continue
 
 
 def _headers(profile: dict[str, Any]) -> dict[str, str]:
