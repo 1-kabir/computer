@@ -76,18 +76,26 @@
 		};
 	});
 
-	async function toggle() {
+	async function focusSearchInput() {
+		await tick();
+		await tick();
+		searchInputEl?.focus();
+		searchInputEl?.select();
+	}
+
+	export async function openSelector() {
 		if ($chatModels.length === 0 && !nullable) return;
+		open = true;
+		search = '';
+		await focusSearchInput();
+	}
+
+	async function toggle() {
 		if (open) {
 			open = false;
 			return;
 		}
-		open = true;
-		search = '';
-		await tick();
-		// Focus search after DropdownMenu renders
-		await tick();
-		searchInputEl?.focus();
+		await openSelector();
 	}
 </script>
 

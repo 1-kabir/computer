@@ -142,6 +142,7 @@
 	let voiceCaptureChunks: Blob[] = [];
 	let voiceCaptureMimeType = 'audio/webm';
 	let selectedSlashCommandIndex = $state(0);
+	let modelSelector: ModelSelector | undefined = $state();
 	const voiceModeAvailable = $derived(
 		$ttsEnabled && $ttsConfigured && ($voiceModeSttMode === 'browser' || $sttConfigured)
 	);
@@ -979,6 +980,7 @@
 		if (onplan && '/plan'.startsWith(slashCommandQuery)) ids.push('plan');
 		if (hasChatContent && onfork && '/fork'.startsWith(slashCommandQuery)) ids.push('fork');
 		if (hasChatContent && onstatus && '/status'.startsWith(slashCommandQuery)) ids.push('status');
+		if ('/model'.startsWith(slashCommandQuery)) ids.push('model');
 		if (
 			hasChatContent &&
 			onskillslist &&
@@ -1091,6 +1093,11 @@
 		if (commandId === 'status' && onstatus) {
 			inputText = '';
 			onstatus();
+			return;
+		}
+		if (commandId === 'model') {
+			inputText = '';
+			void modelSelector?.openSelector();
 			return;
 		}
 		if (commandId === 'skills:list' && onskillslist) {
@@ -1331,6 +1338,31 @@
 					</span>
 				</button>
 			{/if}
+			{#if slashCommandIds.includes('model')}
+				<button
+					type="button"
+					aria-label={`${$t('chat.commandModel')}: ${$t('chat.commandModelDesc')}`}
+					use:tooltip={{
+						content: $t('chat.commandModelDesc'),
+						placement: 'top'
+					}}
+					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
+						{selectedSlashCommand('model') ? 'app-interactive-active' : ''}"
+					onmousedown={(e) => e.preventDefault()}
+					onclick={() => {
+						runSlashCommand('model');
+					}}
+					onmouseenter={() => selectSlashCommand('model')}
+				>
+					<span class="app-icon-muted flex items-center justify-center w-4 shrink-0">
+						<Icon name="spark" size={13} strokeWidth={1.7} />
+					</span>
+					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
+						<span class="truncate">{$t('chat.commandModel')}</span>
+						<span class="app-muted text-[0.625rem] truncate shrink-0">/model</span>
+					</span>
+				</button>
+			{/if}
 			{#if slashCommandIds.includes('skills:list')}
 				<button
 					type="button"
@@ -1557,7 +1589,7 @@
 				{/if}
 			</div>
 			<div class="self-end mr-1 flex items-center gap-2">
-				<ModelSelector bind:selectedModel onchange={onsettingschange} />
+				<ModelSelector bind:this={modelSelector} bind:selectedModel onchange={onsettingschange} />
 				<DictateButton
 					ontext={(text) => {
 						inputText += text;

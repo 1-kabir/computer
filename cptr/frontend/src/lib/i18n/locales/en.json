@@ -773,6 +773,8 @@
 	"chat.commandForkDesc": "Clone chat",
 	"chat.commandStatus": "Status",
 	"chat.commandStatusDesc": "Context usage, chat id",
+	"chat.commandModel": "Model",
+	"chat.commandModelDesc": "Open model selector",
 	"chat.statusContextUsage": "Context usage",
 	"chat.statusEstimated": "Estimated context",
 	"chat.statusChatId": "Chat id",
