@@ -97,7 +97,7 @@ async def get_auth(request: Request):
 
 
 @router.post("/setup")
-async def setup(body: SetupRequest, request: Request):
+async def setup(request: Request, body: SetupRequest):
     """First-time admin setup. Requires valid startup token."""
     if await has_any_user():
         return JSONResponse({"error": "already set up"}, 400)
@@ -123,7 +123,7 @@ async def setup(body: SetupRequest, request: Request):
 
 
 @router.post("/login")
-async def login(body: LoginRequest, request: Request):
+async def login(request: Request, body: LoginRequest):
     """Login with password or PAM."""
     ip = request.client.host if request.client else "unknown"
     if not check_rate_limit(ip):
@@ -150,6 +150,8 @@ async def login(body: LoginRequest, request: Request):
             return JSONResponse({"error": "incorrect credentials"}, 401)
         user_id = await get_or_create_user(body.username)
         user = await User.get_by_id(user_id)
+        if user and user.role == "pending":
+            return JSONResponse({"error": "account pending approval"}, 403)
         return _ok_with_cookie(
             create_token(user_id, body.username, role=user.role if user else "user"),
             {"ok": True, "username": body.username},
@@ -167,7 +169,7 @@ async def logout():
 
 
 @router.post("/password")
-async def update_password(body: UpdatePasswordRequest, request: Request):
+async def update_password(request: Request, body: UpdatePasswordRequest):
     """Update password for the authenticated user."""
     token = request.cookies.get(COOKIE_NAME)
     auth_info = check_access(
@@ -193,7 +195,7 @@ async def update_password(body: UpdatePasswordRequest, request: Request):
 
 
 @router.post("/signup")
-async def signup(body: SignupRequest, request: Request):
+async def signup(request: Request, body: SignupRequest):
     """Self-registration. Only works if auth.signup_enabled is true."""
     signup_enabled = await Config.get("auth.signup_enabled")
     if not signup_enabled:
