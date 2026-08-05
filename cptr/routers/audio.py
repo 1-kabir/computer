@@ -346,7 +346,9 @@ async def transcribe(
     # Small file: send directly, no temp files needed
     if len(raw_data) <= MAX_FILE_SIZE or not HAS_PYDUB:
         try:
-            text = await _transcribe_chunk(raw_data, filename, content_type, base_url, api_key, model)
+            text = await _transcribe_chunk(
+                raw_data, filename, content_type, base_url, api_key, model
+            )
             if cache_json_path and cache_audio_path:
                 _write_bytes_atomic(cache_audio_path, raw_data)
                 _write_json_atomic(
@@ -365,7 +367,9 @@ async def transcribe(
         except httpx.HTTPStatusError as exc:
             detail = f"STT API error: {exc.response.status_code}"
             if len(raw_data) > MAX_FILE_SIZE and not HAS_PYDUB:
-                detail += ". Recording is too large. Install ffmpeg and pydub for automatic splitting."
+                detail += (
+                    ". Recording is too large. Install ffmpeg and pydub for automatic splitting."
+                )
             logger.warning("[transcribe] %s: %s", detail, exc.response.text[:500])
             raise HTTPException(502, detail)
         except httpx.ConnectError:
@@ -388,7 +392,9 @@ async def transcribe(
         async def _do_chunk(path: str) -> str:
             chunk_data = await asyncio.to_thread(Path(path).read_bytes)
             chunk_name = os.path.basename(path)
-            return await _transcribe_chunk(chunk_data, chunk_name, "audio/mpeg", base_url, api_key, model)
+            return await _transcribe_chunk(
+                chunk_data, chunk_name, "audio/mpeg", base_url, api_key, model
+            )
 
         tasks = [_do_chunk(p) for p in chunk_paths]
         # Use gather to preserve order (as_completed doesn't guarantee it)
@@ -412,7 +418,9 @@ async def transcribe(
         return {"text": text}
 
     except httpx.HTTPStatusError as exc:
-        logger.warning("[transcribe] STT API error %s: %s", exc.response.status_code, exc.response.text[:500])
+        logger.warning(
+            "[transcribe] STT API error %s: %s", exc.response.status_code, exc.response.text[:500]
+        )
         raise HTTPException(502, f"STT API error: {exc.response.status_code}")
     except httpx.ConnectError:
         raise HTTPException(502, "Could not connect to STT API")
@@ -451,7 +459,7 @@ def _audio_media_type(fmt: str) -> str:
 
 
 @router.post("/speech")
-async def speech(body: SpeechRequest, request: Request):
+async def speech(request: Request, body: SpeechRequest):
     """Generate speech audio using an OpenAI-compatible TTS API."""
     _get_user(request)
 
