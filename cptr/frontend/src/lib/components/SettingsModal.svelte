@@ -108,7 +108,7 @@
 		{ id: 'agents', label: $t('admin.agents'), icon: 'terminal' },
 		{ id: 'models', label: $t('admin.models'), icon: 'cube' },
 		{ id: 'chat', label: $t('admin.chat'), icon: 'chat-bubble' },
-		{ id: 'tools', label: $t('admin.tools'), icon: 'terminal' },
+		{ id: 'tools', label: $t('admin.tools'), icon: 'tools' },
 		{ id: 'git', label: $t('admin.git'), icon: 'git-branch' },
 		{ id: 'messaging', label: $t('admin.messaging'), icon: 'chat-bubble' },
 		{ id: 'gateway', label: $t('admin.gateway.tab'), icon: 'gateway' },
