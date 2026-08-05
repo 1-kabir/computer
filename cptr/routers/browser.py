@@ -277,7 +277,7 @@ async def list_sessions(request: Request):
 
 
 @router.delete("/sessions/{session_id}")
-async def close_session(session_id: str, request: Request):
+async def close_session(request: Request, session_id: str):
     owner = _owner(_auth(request))
     if not await chrome_viewer_manager.detach_personal(
         session_id, owner, await _personal_keep_alive()
@@ -289,7 +289,7 @@ async def close_session(session_id: str, request: Request):
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str, request: Request):
+async def get_session(request: Request, session_id: str):
     session = manager.session(session_id, _owner(_auth(request)))
     if session is None:
         raise HTTPException(status_code=404, detail="Browser tab expired")
@@ -297,7 +297,7 @@ async def get_session(session_id: str, request: Request):
 
 
 @router.patch("/sessions/{session_id}")
-async def update_session(session_id: str, request: Request):
+async def update_session(request: Request, session_id: str):
     payload = await request.json()
     owner = _owner(_auth(request))
     existing = manager.session(session_id, owner)
@@ -401,7 +401,7 @@ async def disconnect_personal_chrome(request: Request):
 
 
 @router.get("/sessions/{session_id}/blank")
-async def blank(session_id: str, request: Request):
+async def blank(request: Request, session_id: str):
     if manager.session(session_id, _owner(_auth(request))) is None:
         raise HTTPException(status_code=404, detail="Browser tab expired")
     return HTMLResponse("<!doctype html><title>Browser</title>")
@@ -411,7 +411,7 @@ async def blank(session_id: str, request: Request):
     "/resources/{session_id}/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
 )
-async def proxy_resource(session_id: str, path: str, request: Request):
+async def proxy_resource(request: Request, session_id: str, path: str):
     owner = _owner(_auth(request))
     session = manager.session(session_id, owner)
     if session is None or not session.origin:
@@ -425,7 +425,7 @@ async def proxy_resource(session_id: str, path: str, request: Request):
 @router.api_route(
     "/frame/{session_id}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 )
-async def proxy_frame(session_id: str, url: str, request: Request):
+async def proxy_frame(request: Request, session_id: str, url: str):
     return await _proxy(request, session_id, url)
 
 
@@ -433,7 +433,7 @@ async def proxy_frame(session_id: str, url: str, request: Request):
     "/frame/{session_id}/{scheme}/{host}/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
 )
-async def legacy_proxy_frame(session_id: str, scheme: str, host: str, path: str, request: Request):
+async def legacy_proxy_frame(request: Request, session_id: str, scheme: str, host: str, path: str):
     return await _proxy(
         request,
         session_id,
@@ -445,7 +445,7 @@ async def legacy_proxy_frame(session_id: str, scheme: str, host: str, path: str,
     "/frame/{session_id}/{scheme}/{host}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
 )
-async def legacy_proxy_frame_root(session_id: str, scheme: str, host: str, request: Request):
+async def legacy_proxy_frame_root(request: Request, session_id: str, scheme: str, host: str):
     return await _proxy(request, session_id, urlunsplit((scheme, host, "/", request.url.query, "")))
 
 
