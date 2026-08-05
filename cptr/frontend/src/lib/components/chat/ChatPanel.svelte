@@ -65,6 +65,7 @@
 	import { getSkills, type SkillInfo } from '$lib/apis/skills';
 	import Spinner from '../common/Spinner.svelte';
 	import Icon from '../Icon.svelte';
+	import { tooltip } from '$lib/tooltip';
 	import { toast } from 'svelte-sonner';
 	import { t } from '$lib/i18n';
 
@@ -1422,6 +1423,11 @@
 		});
 	}
 
+	function handleNewChatCommand() {
+		if (onopenchat) return onopenchat();
+		openChatTab();
+	}
+
 	function shouldUseTts() {
 		return (
 			$ttsEnabled &&
@@ -1740,7 +1746,7 @@
 >
 	{#if !isLanding}
 		<div
-			class="relative z-30 -mb-12 flex h-7 shrink-0 items-center gap-2 px-3 dark:border-white/6"
+			class="relative z-30 -mb-12 flex h-7 shrink-0 items-center gap-2 pl-3 pr-2 dark:border-white/6"
 			style="border-color: color-mix(in oklab, var(--app-fg) 8%, transparent);"
 		>
 			<div
@@ -1753,16 +1759,29 @@
 			>
 				{displayChatTitle}
 			</div>
-			<button
-				bind:this={statusButtonEl}
-				type="button"
-				class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
-				aria-label={statusTitle}
-				title={statusTitle}
-				onclick={handleStatusCommand}
-			>
-				<Icon name="list" size={13} />
-			</button>
+			<div class="flex shrink-0 items-center gap-0.5">
+				<button
+					type="button"
+					class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
+					aria-label={$t('bar.newChat')}
+					title={$t('bar.newChat')}
+					use:tooltip={$t('bar.newChat')}
+					onclick={handleNewChatCommand}
+				>
+					<Icon name="chat-plus" size={14} />
+				</button>
+				<button
+					bind:this={statusButtonEl}
+					type="button"
+					class="relative flex size-6 shrink-0 items-center justify-center rounded-lg transition-colors duration-75 {statusButtonClass}"
+					aria-label={statusTitle}
+					title={statusTitle}
+					use:tooltip={statusTitle}
+					onclick={handleStatusCommand}
+				>
+					<Icon name="list" size={13} />
+				</button>
+			</div>
 		</div>
 	{/if}
 

@@ -1430,6 +1430,7 @@
 							: tab.path}
 						tabId={tab.id}
 						active={tab.id === group.activeTabId}
+						onopenchat={(chatId) => openChatTab(chatId, group.id)}
 					/>
 				</div>
 			{/each}
