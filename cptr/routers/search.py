@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from cptr.models import Chat, is_internal_chat
-from cptr.routers.workspace import walk_and_rank_files
+from cptr.utils.runtime import Runtime
+from cptr.utils.runtime import FileError
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 
@@ -57,16 +57,16 @@ async def unified_search(
         per_ws_limit = max(3, file_limit // max(len(ws_paths), 1))
 
         for ws in ws_paths:
-            root = Path(ws).resolve()
-            if not root.exists() or not root.is_dir():
+            try:
+                results = await Runtime.search_files(request, q, ws, per_ws_limit)
+            except FileError:
                 continue
-            results = await asyncio.to_thread(walk_and_rank_files, root, q, per_ws_limit)
-            for r in results:
+            for r in results["results"]:
                 all_results.append(
                     {
-                        "path": r.path,
-                        "name": r.name,
-                        "type": r.type,
+                        "path": r["path"],
+                        "name": r["name"],
+                        "type": r["type"],
                         "workspace": ws,
                     }
                 )

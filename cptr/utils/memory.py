@@ -16,6 +16,8 @@ from typing import Any
 
 from cptr.env import DATA_DIR
 from cptr.models import Config
+from cptr.utils.identity import identity_for_user_id
+from cptr.utils.runtime import Runtime, FileError
 from cptr.utils.workspace import ensure_cptr_gitignored
 
 MEMORY_DIR_NAME = "memory"
@@ -1161,12 +1163,13 @@ async def write_memory(
     operations: list[dict[str, Any]],
 ) -> dict[str, Any]:
     memory_file = await resolve_memory_file(user_id, workspace, scope)
-    if scope == "workspace":
-        await asyncio.to_thread(ensure_cptr_gitignored, workspace)
+    identity = await identity_for_user_id(user_id) if scope == "workspace" else None
     uses_markdown = any(
         isinstance(operation, dict) and _operation_uses_markdown(operation)
         for operation in operations
     )
+    if scope == "workspace" and uses_markdown:
+        await asyncio.to_thread(ensure_cptr_gitignored, workspace)
     lock_path = memory_file.path.parent if uses_markdown else memory_file.path
     async with _memory_file_lock(lock_path):
         if uses_markdown:
@@ -1182,7 +1185,18 @@ async def write_memory(
             result = await asyncio.to_thread(apply_markdown_memory_batch, root, operations)
             result.update({"scope": scope, "path": str(root.root)})
             return result
-        entries = await asyncio.to_thread(read_memory_entries, memory_file.path)
+        if identity:
+            try:
+                file_data = await Runtime.read_file(identity, str(memory_file.path))
+                entries = [
+                    line[2:].strip()
+                    for line in str(file_data.get("content") or "").splitlines()
+                    if line.strip().startswith("- ") and line[2:].strip()
+                ]
+            except FileError:
+                entries = []
+        else:
+            entries = await asyncio.to_thread(read_memory_entries, memory_file.path)
         success, message, next_entries, usage = apply_memory_batch(
             entries, operations, memory_file.character_limit
         )
@@ -1195,7 +1209,12 @@ async def write_memory(
                 "scope": scope,
                 "path": str(memory_file.path),
             }
-        await asyncio.to_thread(write_memory_entries, memory_file.path, next_entries)
+        if identity:
+            await Runtime.write_file(
+                identity, str(memory_file.path), format_memory_entries(next_entries)
+            )
+        else:
+            await asyncio.to_thread(write_memory_entries, memory_file.path, next_entries)
         return {
             "success": True,
             "message": message,
@@ -1227,7 +1246,17 @@ async def read_memory_state(user_id: str, workspace: str) -> dict[str, Any]:
     workspace_path_value = ""
     if workspace:
         workspace_memory = await resolve_memory_file(user_id, workspace, "workspace")
-        workspace_entries = await asyncio.to_thread(read_memory_entries, workspace_memory.path)
+        try:
+            file_data = await Runtime.read_file(
+                await identity_for_user_id(user_id), str(workspace_memory.path)
+            )
+            workspace_entries = [
+                line[2:].strip()
+                for line in str(file_data.get("content") or "").splitlines()
+                if line.strip().startswith("- ") and line[2:].strip()
+            ]
+        except FileError:
+            workspace_entries = []
         workspace_usage = (
             f"{measure_memory_entries(workspace_entries)}/{workspace_memory.character_limit}"
         )
@@ -1267,9 +1296,20 @@ async def recall_memory_context(
     snippets_by_scope: dict[str, list[MemorySnippet]] = {"user": [], "workspace": []}
 
     for root in roots:
-        baseline_text = (
-            root.baseline_path.read_text(errors="replace") if root.baseline_path.is_file() else ""
-        )
+        if root.scope == "workspace":
+            try:
+                file_data = await Runtime.read_file(
+                    await identity_for_user_id(user_id), str(root.baseline_path)
+                )
+                baseline_text = str(file_data.get("content") or "")
+            except FileError:
+                baseline_text = ""
+        else:
+            baseline_text = (
+                root.baseline_path.read_text(errors="replace")
+                if root.baseline_path.is_file()
+                else ""
+            )
         contextual_query = query
         if baseline_text:
             baseline_links = _extract_baseline_links(baseline_text)
@@ -1343,7 +1383,21 @@ async def build_memory_prompt(
         )
 
     for root, title, budget, snippets in render_roots:
-        baseline = _read_baseline_block(root.baseline_path, budget)
+        if root.scope == "workspace":
+            try:
+                file_data = await Runtime.read_file(
+                    await identity_for_user_id(user_id), str(root.baseline_path)
+                )
+                text = str(file_data.get("content") or "").strip()
+                baseline = (
+                    _trim_prompt_text(_prompt_safe_text(text, root.baseline_path.name), budget)
+                    if text
+                    else ""
+                )
+            except FileError:
+                baseline = ""
+        else:
+            baseline = _read_baseline_block(root.baseline_path, budget)
         remaining = max(0, budget - len(baseline))
         contextual = _render_context_snippets(snippets, remaining)
         content = "\n".join(part for part in (baseline, contextual) if part.strip()).strip()
@@ -1599,6 +1653,7 @@ async def run_memory_review(
         transcript = summarize_recent_conversation(conversation_messages, assistant_reply)
         prompt = build_memory_review_prompt(memory_state, workspace, transcript)
         parsed = await generate_json(
+            None,
             model_id=await Config.get("memory.background_review.model"),
             active_connection=model_connection,
             active_model=model,

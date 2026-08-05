@@ -232,7 +232,7 @@ async def chat_completion(
 
 
 async def generate_text(
-    request=None,
+    request,
     *,
     model_id: str | None,
     messages: list[dict],
@@ -304,7 +304,7 @@ async def generate_text(
 
 
 async def generate_json(
-    request=None,
+    request,
     *,
     model_id: str | None,
     messages: list[dict],

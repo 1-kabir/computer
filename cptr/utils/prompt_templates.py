@@ -12,6 +12,8 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from cptr.models import Config
+from cptr.utils.identity import identity_for_user_id
+from cptr.utils.runtime import Runtime, FileError
 from cptr.utils.skills import build_catalog_xml, discover_skills
 
 logger = logging.getLogger(__name__)
@@ -138,11 +140,14 @@ def _safe_version() -> str:
         return "dev"
 
 
-def _format_cptr_context(workspace: str, model: str = "") -> str:
+def _format_cptr_context(
+    workspace: str, model: str = "", home: str | None = None, shell: str | None = None
+) -> str:
     """Return the default cptr runtime context block for the system prompt."""
     ws_path = Path(workspace)
     runtime = _runtime_label()
-    shell = os.environ.get("SHELL") or os.environ.get("COMSPEC") or ""
+    shell = shell or os.environ.get("SHELL") or os.environ.get("COMSPEC") or ""
+    home = home or str(Path.home())
     host_control = (
         "Commands run in the cptr backend environment. Because this appears to be a "
         "container, commands affect the container and mounted paths; host-level controls "
@@ -161,7 +166,7 @@ def _format_cptr_context(workspace: str, model: str = "") -> str:
         f"- OS: {platform.system().replace('Darwin', 'macOS')} {platform.release()}",
         f"- Architecture: {platform.machine() or 'unknown'}",
         f"- Shell: {shell or 'unknown'}",
-        f"- Home: {Path.home()}",
+        f"- Home: {home}",
         f"- cptr version: {_safe_version()}",
     ]
     if model:
@@ -221,11 +226,14 @@ def _build_template_variables(
     model: str = "",
     memory: str = "",
     skills_enabled: bool = True,
+    home: str | None = None,
+    shell: str | None = None,
 ) -> dict[str, str]:
     """Build the dict of template variable values for the current context."""
     ws_path = Path(workspace) if workspace else None
     os_name = platform.system().replace("Darwin", "macOS")
-    shell = os.environ.get("SHELL") or os.environ.get("COMSPEC") or ""
+    shell = shell or os.environ.get("SHELL") or os.environ.get("COMSPEC") or ""
+    home = home or str(Path.home())
 
     instructions = _load_instruction_files(workspace) if workspace else ""
     if instructions:
@@ -247,14 +255,14 @@ def _build_template_variables(
         "INSTRUCTIONS": instructions_block,
         "MEMORY": memory,
         "SKILLS": skills_block,
-        "CPTR_CONTEXT": _format_cptr_context(workspace, model) if workspace else "",
+        "CPTR_CONTEXT": _format_cptr_context(workspace, model, home, shell) if workspace else "",
         "RUNTIME_ENV": _runtime_label(),
         "HOSTNAME": _safe_hostname(),
         "OS": os_name,
         "PLATFORM": platform.platform(),
         "ARCH": platform.machine(),
         "SHELL": shell,
-        "HOME": str(Path.home()),
+        "HOME": home,
         "CPTR_VERSION": _safe_version(),
         "DATE": date.today().isoformat(),
         "MODEL": model,
@@ -281,7 +289,16 @@ async def load_system_prompt(
 
     if workspace:
         ws_prompt = Path(workspace) / ".cptr" / "system.md"
-        if ws_prompt.is_file():
+        if user_id:
+            try:
+                file_data = await Runtime.read_file(
+                    await identity_for_user_id(user_id), str(ws_prompt)
+                )
+                if not file_data.get("binary"):
+                    template = str(file_data.get("content") or "").strip()
+            except FileError:
+                pass
+        elif ws_prompt.is_file():
             template = ws_prompt.read_text(errors="replace").strip()
 
     if template is None:
@@ -328,5 +345,15 @@ async def load_system_prompt(
     except Exception:
         skills_enabled = True
 
-    variables = _build_template_variables(workspace, model, memory, skills_enabled)
+    home = None
+    shell = None
+    if user_id:
+        try:
+            identity = await identity_for_user_id(user_id)
+            home = identity.home
+            shell = identity.shell
+        except Exception:
+            logger.debug("[system_prompt] Failed to resolve user identity", exc_info=True)
+
+    variables = _build_template_variables(workspace, model, memory, skills_enabled, home, shell)
     return _render_system_template(template, variables)

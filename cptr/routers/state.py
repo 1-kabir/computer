@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from cptr.env import DATA_DIR
 from cptr.models import Chat, UserStates, Workspace
 from cptr.utils.config import get_or_create_user
+from cptr.utils.identity import IdentityUnavailable, identity_for_request
 
 router = APIRouter(prefix="/api/state", tags=["state"])
 
@@ -30,15 +31,28 @@ async def _get_user_id(request: Request) -> str | None:
     return await get_or_create_user(auth.username)
 
 
-def _resolve_workspace_path(path: str) -> str:
+def _resolve_workspace_path(path: str, home: str | None = None) -> str:
     """Return the absolute, normalized workspace path."""
     raw = (path or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="workspace path is required")
-    expanded = Path(raw).expanduser()
+    if home and raw == "~":
+        expanded = Path(home)
+    elif home and raw.startswith("~/"):
+        expanded = Path(home) / raw[2:]
+    else:
+        expanded = Path(raw).expanduser()
     if not expanded.is_absolute():
         raise HTTPException(status_code=400, detail="workspace path must be absolute")
     return str(expanded.resolve())
+
+
+async def _resolve_request_workspace_path(request: Request, path: str) -> str:
+    try:
+        identity = await identity_for_request(request)
+        return _resolve_workspace_path(path, identity.home)
+    except IdentityUnavailable as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 def _try_resolve_workspace_path(path: str) -> str | None:
@@ -147,7 +161,7 @@ async def get_workspace(request: Request, path: str = Query(...)):
     user_id = await _get_user_id(request)
     if not user_id:
         return {}
-    workspace_path = _resolve_workspace_path(path)
+    workspace_path = await _resolve_request_workspace_path(request, path)
     workspace = _newest_workspace(await _workspaces_at_path(user_id, workspace_path))
     if not workspace:
         return {
@@ -172,7 +186,7 @@ async def put_workspace(request: Request, path: str = Query(...)):
     user_id = await _get_user_id(request)
     if not user_id:
         return {"status": "skipped"}
-    workspace_path = _resolve_workspace_path(path)
+    workspace_path = await _resolve_request_workspace_path(request, path)
     workspace_data = await request.json()
     existing_workspace = _newest_workspace(await _workspaces_at_path(user_id, workspace_path))
     if "name" in workspace_data:
@@ -203,7 +217,7 @@ async def delete_workspace(request: Request, path: str = Query(...)):
     user_id = await _get_user_id(request)
     if not user_id:
         return {"status": "skipped"}
-    workspace_path = _resolve_workspace_path(path)
+    workspace_path = await _resolve_request_workspace_path(request, path)
     paths = [workspace.path for workspace in await _workspaces_at_path(user_id, workspace_path)]
     if workspace_path not in paths:
         paths.append(workspace_path)
@@ -219,7 +233,13 @@ async def get_welcome(request: Request):
     """Return data for the welcome/landing page."""
     import asyncio
 
-    system_info = await asyncio.to_thread(_collect_system_info)
+    try:
+        identity = await identity_for_request(request)
+        user_home = Path(identity.home)
+    except Exception:
+        user_home = Path.home()
+
+    system_info = await asyncio.to_thread(_collect_system_info, user_home)
 
     # Recent workspaces from DB (most recently used first)
     user_id = await _get_user_id(request)
@@ -242,7 +262,7 @@ async def get_welcome(request: Request):
     return system_info
 
 
-def _collect_system_info() -> dict:
+def _collect_system_info(user_home: Path) -> dict:
     """Gather all system info synchronously. Called via asyncio.to_thread()."""
     import platform
     import socket
@@ -326,7 +346,7 @@ def _collect_system_info() -> dict:
 
     # Disk
     try:
-        disk = shutil.disk_usage(str(Path.home()))
+        disk = shutil.disk_usage(str(user_home))
         system["disk_total"] = disk.total
         system["disk_used"] = disk.used
         system["disk_free"] = disk.free
@@ -522,25 +542,26 @@ def _collect_system_info() -> dict:
         pass
 
     # Suggested directories
-    home = str(Path.home())
+    home_path = user_home
+    home = str(home_path)
     candidates = [
         home,
-        str(Path.home() / "Documents"),
-        str(Path.home() / "Desktop"),
-        str(Path.home() / "Downloads"),
-        str(Path.home() / "Projects"),
-        str(Path.home() / "projects"),
-        str(Path.home() / "code"),
-        str(Path.home() / "Code"),
-        str(Path.home() / "dev"),
-        str(Path.home() / "workspace"),
-        str(Path.home() / "src"),
+        str(home_path / "Documents"),
+        str(home_path / "Desktop"),
+        str(home_path / "Downloads"),
+        str(home_path / "Projects"),
+        str(home_path / "projects"),
+        str(home_path / "code"),
+        str(home_path / "Code"),
+        str(home_path / "dev"),
+        str(home_path / "workspace"),
+        str(home_path / "src"),
     ]
     if platform.system() == "Windows":
         candidates.extend(
             [
-                str(Path.home() / "source" / "repos"),
-                str(Path.home() / "OneDrive" / "Documents"),
+                str(home_path / "source" / "repos"),
+                str(home_path / "OneDrive" / "Documents"),
             ]
         )
     candidates.append(tempfile.gettempdir())

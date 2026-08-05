@@ -6,10 +6,11 @@ import asyncio
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from cptr.utils.config import check_access
+from cptr.utils.identity import IdentityUnavailable, identity_for_request
 from cptr.utils.terminal import TerminalUnavailable, manager, IS_WINDOWS
 from cptr.utils.tools import (
     command_session_bytes_since,
@@ -54,13 +55,16 @@ class CommandSessionInfo(BaseModel):
 
 
 @router.post("", response_model=SessionInfo)
-async def create_session(req: CreateSessionRequest):
+async def create_session(request: Request, req: CreateSessionRequest):
     """Create a new terminal session."""
     logger.info(f"Creating terminal session: cwd={req.cwd}, rows={req.rows}, cols={req.cols}")
     try:
-        session = manager.create(rows=req.rows, cols=req.cols, cwd=req.cwd)
+        identity = await identity_for_request(request)
+        session = manager.create(identity=identity, rows=req.rows, cols=req.cols, cwd=req.cwd)
     except TerminalUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except IdentityUnavailable as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     logger.info(
         f"Created session {session.session_id} at {session.cwd}, fd={session._fd}, alive={session.is_alive()}"
     )
@@ -68,24 +72,26 @@ async def create_session(req: CreateSessionRequest):
 
 
 @router.get("", response_model=List[SessionInfo])
-async def list_sessions():
+async def list_sessions(request: Request):
     """List active terminal sessions."""
-    sessions = manager.list_sessions()
+    sessions = manager.list_sessions(request)
     logger.debug(f"Listing sessions: {len(sessions)} active")
     return [SessionInfo(**s) for s in sessions]
 
 
 @router.get("/sessions", response_model=List[CommandSessionInfo])
-async def list_command_session_endpoint(workspace: str | None = None, chat_id: str | None = None):
+async def list_command_session_endpoint(
+    request: Request, workspace: str | None = None, chat_id: str | None = None
+):
     """List live command sessions created by run_command."""
-    return [CommandSessionInfo(**s) for s in list_command_sessions(workspace, chat_id)]
+    return [CommandSessionInfo(**s) for s in list_command_sessions(request, workspace, chat_id)]
 
 
 @router.delete("/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(request: Request, session_id: str):
     """Kill a terminal session."""
     logger.info(f"Deleting session {session_id}")
-    if not manager.close(session_id):
+    if not manager.close(request, session_id):
         raise HTTPException(status_code=404, detail="Session not found")
     return {"status": "closed"}
 
@@ -106,8 +112,9 @@ async def command_session_ws(websocket: WebSocket, command_session_id: str):
     if auth is None:
         await websocket.close(code=4001, reason="unauthorized")
         return
+    websocket.state.auth = auth
 
-    session = get_command_session(command_session_id)
+    session = get_command_session(websocket, command_session_id)
     if not session:
         await websocket.close(code=4004, reason="Command session not found")
         return
@@ -128,7 +135,7 @@ async def command_session_ws(websocket: WebSocket, command_session_id: str):
         offset = initial_offset
         try:
             while True:
-                session = get_command_session(command_session_id)
+                session = get_command_session(websocket, command_session_id)
                 if not session:
                     break
                 raw, offset = command_session_bytes_since(session, offset)
@@ -160,12 +167,12 @@ async def command_session_ws(websocket: WebSocket, command_session_id: str):
             payload = raw[1:]
 
             if msg_type == MSG_INPUT:
-                error = send_command_session_input(command_session_id, payload)
+                error = send_command_session_input(websocket, command_session_id, payload)
                 if error:
                     logger.debug(
                         "command session input ignored for %s: %s", command_session_id, error
                     )
-                await drain_command_session_input(command_session_id)
+                await drain_command_session_input(websocket, command_session_id)
             elif msg_type == MSG_RESIZE:
                 try:
                     if len(payload) == 4:
@@ -177,15 +184,15 @@ async def command_session_ws(websocket: WebSocket, command_session_id: str):
                         resize_data = _json.loads(payload)
                         cols = resize_data.get("cols", 80)
                         rows = resize_data.get("rows", 24)
-                    resize_command_session(command_session_id, rows, cols)
+                    resize_command_session(websocket, command_session_id, rows, cols)
                 except (ValueError, KeyError) as e:
                     logger.warning(
                         "Invalid command-session resize payload for %s: %s", command_session_id, e
                     )
             elif msg_type == MSG_STOP:
-                stop_command_session(command_session_id)
+                stop_command_session(websocket, command_session_id)
             elif msg_type == MSG_FORCE_STOP:
-                stop_command_session(command_session_id, force=True)
+                stop_command_session(websocket, command_session_id, force=True)
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for command session %s", command_session_id)
     except Exception as e:
@@ -216,8 +223,9 @@ async def terminal_ws(websocket: WebSocket, session_id: str):
     if auth is None:
         await websocket.close(code=4001, reason="unauthorized")
         return
+    websocket.state.auth = auth
 
-    session = manager.get(session_id)
+    session = manager.get(websocket, session_id)
     if not session:
         logger.warning(f"WebSocket: session {session_id} not found")
         await websocket.close(code=4004, reason="Session not found")

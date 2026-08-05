@@ -22,16 +22,18 @@ from cptr.utils.agents.events import (
     AgentToolUpdate,
 )
 from cptr.utils.agents.prompts import session_turn_prompt_text
+from cptr.utils.identity import env_for, preexec_for
 
 CODEX_STDOUT_CHUNK_SIZE = 64 * 1024
 CODEX_MAX_WIRE_MESSAGE_CHARS = 16 * 1024 * 1024
 
 
 class CodexAppServer:
-    def __init__(self, command: str, cwd: str, env: dict[str, str]) -> None:
+    def __init__(self, command: str, cwd: str, env: dict[str, str], preexec_fn=None) -> None:
         self.command = command
         self.cwd = cwd
         self.env = env
+        self.preexec_fn = preexec_fn
         self.proc: asyncio.subprocess.Process | None = None
         self.reader_task: asyncio.Task | None = None
         self.stderr_task: asyncio.Task | None = None
@@ -50,6 +52,7 @@ class CodexAppServer:
             stderr=asyncio.subprocess.PIPE,
             cwd=self.cwd or os.getcwd(),
             env=self.env,
+            preexec_fn=self.preexec_fn,
         )
         self.reader_task = asyncio.create_task(self._reader_loop())
         self.stderr_task = asyncio.create_task(self._stderr_loop())
@@ -359,12 +362,18 @@ async def run_codex_agent(
     chat_params: dict[str, Any],
     resume_state: dict[str, Any] | None,
     attachments: PreparedAgentAttachments,
+    identity=None,
 ) -> AsyncIterator[AgentEvent]:
-    env = os.environ.copy()
+    env = env_for(identity, workspace) if identity and identity.is_pam else os.environ.copy()
     if profile.get("home"):
         env["CODEX_HOME"] = os.path.expanduser(str(profile["home"]))
 
-    client = CodexAppServer(str(profile["command"]), workspace, env)
+    client = CodexAppServer(
+        str(profile["command"]),
+        workspace,
+        env,
+        preexec_for(identity) if identity and identity.is_pam else None,
+    )
     thread_id: str | None = None
     turn_id: str | None = None
     try:

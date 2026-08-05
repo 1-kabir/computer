@@ -16,6 +16,8 @@ import httpx
 from cptr.models import Config, File
 from cptr.utils.config import _get_jwt_secret, now_ms
 from cptr.utils.crypto import decrypt_key
+from cptr.utils.identity import identity_for_user_id
+from cptr.utils.runtime import Runtime
 from cptr.utils.storage import get_storage
 
 
@@ -134,12 +136,12 @@ async def _store_image(
 
     if workspace:
         workspace_path = _unique_workspace_image_path(workspace, source, content_type)
-
-        def _write() -> None:
+        if user_id:
+            identity = await identity_for_user_id(user_id)
+            await Runtime.write_file(identity, str(workspace_path), data)
+        else:
             workspace_path.parent.mkdir(parents=True, exist_ok=True)
             workspace_path.write_bytes(data)
-
-        await asyncio.to_thread(_write)
 
     filename = workspace_path.name if workspace_path else f"{source}{ext}"
     meta = {

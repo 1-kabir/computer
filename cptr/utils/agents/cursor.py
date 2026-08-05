@@ -22,6 +22,7 @@ from cptr.utils.agents.events import (
     AgentToolUpdate,
 )
 from cptr.utils.agents.prompts import turn_prompt_text
+from cptr.utils.identity import env_for, preexec_for
 
 
 CURSOR_CAPABILITIES = {"_meta": {"parameterizedModelPicker": True}}
@@ -43,8 +44,9 @@ async def run_cursor_agent(
     chat_params: dict[str, Any],
     resume_state: dict[str, Any] | None,
     attachments: PreparedAgentAttachments,
+    identity=None,
 ) -> AsyncIterator[AgentEvent]:
-    env = os.environ.copy()
+    env = env_for(identity, workspace) if identity and identity.is_pam else os.environ.copy()
     if profile.get("home"):
         env["HOME"] = os.path.expanduser(str(profile["home"]))
 
@@ -67,6 +69,7 @@ async def run_cursor_agent(
         client_capabilities=CURSOR_CAPABILITIES,
         resume_session_id=session_id,
         auto_approve_permissions=_auto_approve(chat_params),
+        preexec_fn=preexec_for(identity) if identity and identity.is_pam else None,
     )
     try:
         await client.start()

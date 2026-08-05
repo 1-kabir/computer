@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cptr.utils.identity import identity_for_user_id
+from cptr.utils.runtime import Runtime
 from cptr.utils.storage import get_storage
 
 
@@ -40,6 +42,7 @@ def _is_image(file_meta: dict[str, Any]) -> bool:
 async def prepare_agent_attachments(
     *,
     workspace: str,
+    user_id: str | None,
     chat_id: str,
     message_id: str,
     files: list[dict[str, Any]] | None,
@@ -54,11 +57,11 @@ async def prepare_agent_attachments(
         / _safe_segment(chat_id)
         / _safe_segment(message_id)
     )
-    root.mkdir(parents=True, exist_ok=True)
 
     images: list[AgentAttachment] = []
     staged_files: list[AgentAttachment] = []
     storage = get_storage()
+    identity = await identity_for_user_id(user_id) if user_id else None
     for file_meta in files:
         if not isinstance(file_meta, dict):
             continue
@@ -73,7 +76,11 @@ async def prepare_agent_attachments(
 
         name = _safe_segment(str(file_meta.get("name") or file_id))
         path = root / f"{_safe_segment(file_id)}-{name}"
-        path.write_bytes(data)
+        if identity:
+            await Runtime.write_file(identity, str(path), data)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
         mime_type = str(
             file_meta.get("content_type")
             or file_meta.get("mime_type")

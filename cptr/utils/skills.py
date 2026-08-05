@@ -843,6 +843,7 @@ async def run_skill_review(
             f"Conversation:\n{transcript}"
         )
         parsed = await generate_json(
+            None,
             model_id=await Config.get("skills.background_review.model"),
             active_connection=model_connection,
             active_model=model,

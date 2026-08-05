@@ -15,6 +15,7 @@ import logging
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from dateutil.rrule import rrulestr
@@ -166,12 +167,12 @@ async def execute_automation(automation, webhook_payload: str | None = None) -> 
 
         await Chat.update_current_message(chat.id, assistant_msg.id, now_ms())
 
-        # Write .cptr/chats/{id}.json marker so list_chats discovers it
-        from pathlib import Path
+        marker = Path(workspace) / ".cptr" / "chats" / f"{chat.id}.json"
+        from cptr.utils.identity import identity_for_user_id
+        from cptr.utils.runtime import Runtime
 
-        chats_dir = Path(workspace) / ".cptr" / "chats"
-        chats_dir.mkdir(parents=True, exist_ok=True)
-        (chats_dir / f"{chat.id}.json").write_text("{}")
+        identity = await identity_for_user_id(automation.user_id)
+        await Runtime.write_file(identity, str(marker), "{}")
 
         from cptr.utils.model_targets import resolve_model_target
 
@@ -181,6 +182,7 @@ async def execute_automation(automation, webhook_payload: str | None = None) -> 
         from cptr.utils.chat_task import start_task
 
         start_task(
+            None,
             message_id=assistant_msg.id,
             chat_id=chat.id,
             user_id=automation.user_id,

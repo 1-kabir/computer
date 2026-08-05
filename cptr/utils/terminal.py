@@ -14,6 +14,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from cptr.utils.identity import ExecutionIdentity, env_for, expand_user_path, preexec_for
+
 SCROLLBACK_SIZE = 64 * 1024  # 64 KB
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -28,6 +30,8 @@ class TerminalSession:
 
     session_id: str
     cwd: str
+    user_id: str | None = None
+    identity: ExecutionIdentity | None = field(default=None, repr=False)
     rows: int = 24
     cols: int = 80
     _scrollback: bytearray = field(default_factory=bytearray, repr=False)
@@ -108,8 +112,21 @@ class TerminalSession:
                 pass
 
 
+def _make_readable(path: str) -> None:
+    try:
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
+
+
 def _create_unix(
-    session_id: str, shell: str, work_dir: str, env: dict, rows: int, cols: int
+    session_id: str,
+    identity: ExecutionIdentity,
+    shell: str,
+    work_dir: str,
+    env: dict,
+    rows: int,
+    cols: int,
 ) -> TerminalSession:
     """Create a terminal session on Unix using stdlib pty."""
     import fcntl
@@ -124,13 +141,18 @@ def _create_unix(
 
     shell_name = os.path.basename(shell)
     shell_args = [shell]
-    home = os.path.expanduser("~")
+    home = identity.home
+    preexec = preexec_for(identity) if identity.is_pam else None
 
     # Create a temp init script that sources the user's real config then cd's.
     # This guarantees cwd is set AFTER all init files run. No timing hacks.
     if shell_name in ("zsh",):
         # For zsh: use ZDOTDIR to inject our .zshrc
         zdotdir = tempfile.mkdtemp(prefix="cptr_zsh_")
+        try:
+            os.chmod(zdotdir, 0o755)
+        except OSError:
+            pass
         init_content = (
             f'ZDOTDIR="{home}"\n'
             f'[[ -f "{home}/.zshenv" ]] && source "{home}/.zshenv"\n'
@@ -140,9 +162,11 @@ def _create_unix(
         )
         with open(os.path.join(zdotdir, ".zshrc"), "w") as f:
             f.write(init_content)
+        _make_readable(os.path.join(zdotdir, ".zshrc"))
         # Also create .zshenv to prevent system zshenv from interfering
         with open(os.path.join(zdotdir, ".zshenv"), "w") as f:
             f.write("")
+        _make_readable(os.path.join(zdotdir, ".zshenv"))
         env["ZDOTDIR"] = zdotdir
         shell_args = [shell, "-i"]
     elif shell_name in ("bash",):
@@ -154,12 +178,14 @@ def _create_unix(
             f'[[ -f "{home}/.bashrc" ]] && source "{home}/.bashrc"\ncd {shlex.quote(work_dir)}\n'
         )
         tmpf.close()
+        _make_readable(tmpf.name)
         shell_args = [shell, "--rcfile", tmpf.name, "-i"]
     else:
         # Generic POSIX: use ENV variable
         tmpf = tempfile.NamedTemporaryFile(mode="w", prefix="cptr_sh_", suffix=".sh", delete=False)
         tmpf.write(f'[ -f "$HOME/.profile" ] && . "$HOME/.profile"\ncd {shlex.quote(work_dir)}\n')
         tmpf.close()
+        _make_readable(tmpf.name)
         env["ENV"] = tmpf.name
         shell_args = [shell, "-i"]
 
@@ -176,6 +202,8 @@ def _create_unix(
         if slave_fd > 2:
             os.close(slave_fd)
 
+        if preexec:
+            preexec()
         os.chdir(work_dir)
         os.execvpe(shell, shell_args, env)
     else:
@@ -187,6 +215,8 @@ def _create_unix(
         return TerminalSession(
             session_id=session_id,
             cwd=work_dir,
+            user_id=identity.app_user_id,
+            identity=identity,
             rows=rows,
             cols=cols,
             _fd=master_fd,
@@ -195,7 +225,13 @@ def _create_unix(
 
 
 def _create_windows(
-    session_id: str, shell: str, work_dir: str, env: dict, rows: int, cols: int
+    session_id: str,
+    identity: ExecutionIdentity,
+    shell: str,
+    work_dir: str,
+    env: dict,
+    rows: int,
+    cols: int,
 ) -> TerminalSession:
     """Create a terminal session on Windows using pywinpty."""
     try:
@@ -217,6 +253,8 @@ def _create_windows(
     return TerminalSession(
         session_id=session_id,
         cwd=work_dir,
+        user_id=identity.app_user_id,
+        identity=identity,
         rows=rows,
         cols=cols,
         _process=proc,
@@ -229,42 +267,74 @@ class SessionManager:
     def __init__(self) -> None:
         self._sessions: Dict[str, TerminalSession] = {}
 
-    def create(self, rows: int = 24, cols: int = 80, cwd: Optional[str] = None) -> TerminalSession:
+    def create(
+        self,
+        identity: ExecutionIdentity,
+        rows: int = 24,
+        cols: int = 80,
+        cwd: Optional[str] = None,
+    ) -> TerminalSession:
         session_id = uuid.uuid4().hex[:12]
-        work_dir = cwd or os.path.expanduser("~")
+        work_dir = (
+            str(expand_user_path(cwd, identity).resolve())
+            if identity.is_pam and cwd
+            else cwd or identity.home
+        )
 
         if IS_WINDOWS:
             shell = os.environ.get("COMSPEC", "cmd.exe")
         else:
-            shell = os.environ.get("SHELL", "/bin/sh")
+            shell = identity.shell if identity.is_pam else os.environ.get("SHELL", "/bin/sh")
 
-        env = os.environ.copy()
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["COLUMNS"] = str(cols)
-        env["LINES"] = str(rows)
-        env["PWD"] = work_dir
+        if identity.is_pam:
+            env = env_for(
+                identity,
+                work_dir,
+                {
+                    "TERM": "xterm-256color",
+                    "COLORTERM": "truecolor",
+                    "COLUMNS": str(cols),
+                    "LINES": str(rows),
+                },
+            )
+        else:
+            env = os.environ.copy()
+            env["TERM"] = "xterm-256color"
+            env["COLORTERM"] = "truecolor"
+            env["COLUMNS"] = str(cols)
+            env["LINES"] = str(rows)
+            env["PWD"] = work_dir
 
         if IS_WINDOWS:
-            session = _create_windows(session_id, shell, work_dir, env, rows, cols)
+            session = _create_windows(session_id, identity, shell, work_dir, env, rows, cols)
         else:
-            session = _create_unix(session_id, shell, work_dir, env, rows, cols)
+            session = _create_unix(session_id, identity, shell, work_dir, env, rows, cols)
 
         self._sessions[session_id] = session
         return session
 
-    def get(self, session_id: str) -> Optional[TerminalSession]:
+    def get(self, request, session_id: str, auth=None) -> Optional[TerminalSession]:
         session = self._sessions.get(session_id)
+        if request is not None:
+            auth = getattr(getattr(request, "state", None), "auth", None)
+        user_id = getattr(auth, "user_id", None)
+        if session and user_id is not None and session.user_id != user_id:
+            return None
         if session and not session.is_alive():
             session.close()
             del self._sessions[session_id]
             return None
         return session
 
-    def list_sessions(self) -> List[dict]:
+    def list_sessions(self, request, auth=None) -> List[dict]:
         result = []
         dead = []
+        if request is not None:
+            auth = getattr(getattr(request, "state", None), "auth", None)
+        user_id = getattr(auth, "user_id", None)
         for sid, session in self._sessions.items():
+            if user_id is not None and session.user_id != user_id:
+                continue
             if session.is_alive():
                 result.append({"session_id": sid, "cwd": session.cwd})
             else:
@@ -274,7 +344,13 @@ class SessionManager:
             del self._sessions[sid]
         return result
 
-    def close(self, session_id: str) -> bool:
+    def close(self, request, session_id: str, auth=None) -> bool:
+        session = self._sessions.get(session_id)
+        if request is not None:
+            auth = getattr(getattr(request, "state", None), "auth", None)
+        user_id = getattr(auth, "user_id", None)
+        if user_id is not None and session and session.user_id != user_id:
+            return False
         session = self._sessions.pop(session_id, None)
         if session:
             session.close()

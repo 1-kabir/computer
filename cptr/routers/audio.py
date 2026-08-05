@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from cptr.models import Config
 from cptr.utils.config import _get_jwt_secret, check_access
 from cptr.utils.crypto import decrypt_key
-from cptr.utils.workspace import ensure_cptr_gitignored
+from cptr.utils.runtime import Runtime, FileError
 
 logger = logging.getLogger(__name__)
 
@@ -69,19 +69,21 @@ def _get_user(request: Request) -> str:
     return auth.user_id
 
 
-def _workspace_audio_cache_dir(workspace: str | None, kind: str) -> Path | None:
+async def _workspace_audio_cache_dir(
+    request: Request, workspace: str | None, kind: str
+) -> Path | None:
     # Voice samples are project context, so they live under the workspace .cptr
     # folder and move with the project. That keeps STT and TTS artifacts available
     # for reuse, debugging, and the local data flywheel. By default,
     # ensure_cptr_gitignored keeps them out of git.
     if not workspace:
         return None
-    ws = Path(workspace).expanduser().resolve()
-    if not ws.is_dir():
+    try:
+        listing = await Runtime.list_directory(request, workspace)
+    except FileError:
         return None
+    ws = Path(listing["path"])
     cache_dir = ws / ".cptr" / "cache" / "audio" / kind
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    ensure_cptr_gitignored(ws)
     return cache_dir
 
 
@@ -97,17 +99,8 @@ def _cache_key(payload: dict, data: bytes | None = None) -> str:
     return h.hexdigest()
 
 
-def _write_bytes_atomic(path: Path, data: bytes) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(path)
-
-
-def _write_json_atomic(path: Path, data: dict) -> None:
-    _write_bytes_atomic(
-        path,
-        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True).encode(),
-    )
+def _cache_json(data: dict) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def _audio_extension(filename: str, content_type: str, fallback: str = ".webm") -> str:
@@ -246,8 +239,8 @@ async def _transcribe_chunk(
 
 @router.post("/transcribe")
 async def transcribe(
-    file: UploadFile,
     request: Request,
+    file: UploadFile,
     workspace: str | None = Form(None),
     text: str | None = Form(None),
     source: str | None = Form(None),
@@ -263,7 +256,7 @@ async def transcribe(
     raw_data = await file.read()
     filename = file.filename or "audio.webm"
     content_type = file.content_type or "audio/webm"
-    cache_dir = _workspace_audio_cache_dir(workspace, "stt")
+    cache_dir = await _workspace_audio_cache_dir(request, workspace, "stt")
     cache_json_path: Path | None = None
     cache_audio_path: Path | None = None
     provided_text = (text or "").strip()
@@ -290,10 +283,11 @@ async def transcribe(
             )
             cache_json_path = cache_dir / f"{key}.json"
             cache_audio_path = cache_dir / f"{key}{audio_ext}"
-            if not cache_json_path.exists() or not cache_audio_path.exists():
-                _write_bytes_atomic(cache_audio_path, raw_data)
-                _write_json_atomic(
-                    cache_json_path,
+            await Runtime.write_file(request, str(cache_audio_path), raw_data)
+            await Runtime.write_file(
+                request,
+                str(cache_json_path),
+                _cache_json(
                     {
                         "type": "stt",
                         "source": source or "browser_speech_recognition",
@@ -303,8 +297,9 @@ async def transcribe(
                         "filename": filename,
                         "content_type": content_type,
                         "language": language,
-                    },
-                )
+                    }
+                ),
+            )
         return {"text": provided_text, "cached": True}
 
     api_key_encrypted = await Config.get("audio.stt_api_key")
@@ -336,12 +331,12 @@ async def transcribe(
         audio_ext = _audio_extension(filename, content_type)
         cache_json_path = cache_dir / f"{key}.json"
         cache_audio_path = cache_dir / f"{key}{audio_ext}"
-        if cache_json_path.exists():
-            try:
-                cached = json.loads(cache_json_path.read_text(encoding="utf-8"))
-                return {"text": str(cached.get("text") or ""), "cached": True}
-            except (OSError, json.JSONDecodeError):
-                pass
+        try:
+            cached_file = await Runtime.read_file(request, str(cache_json_path))
+            cached = json.loads(str(cached_file.get("content") or ""))
+            return {"text": str(cached.get("text") or ""), "cached": True}
+        except (FileError, json.JSONDecodeError):
+            pass
 
     # Small file: send directly, no temp files needed
     if len(raw_data) <= MAX_FILE_SIZE or not HAS_PYDUB:
@@ -350,18 +345,21 @@ async def transcribe(
                 raw_data, filename, content_type, base_url, api_key, model
             )
             if cache_json_path and cache_audio_path:
-                _write_bytes_atomic(cache_audio_path, raw_data)
-                _write_json_atomic(
-                    cache_json_path,
-                    {
-                        "type": "stt",
-                        "text": text,
-                        "audio_file": cache_audio_path.name,
-                        "filename": filename,
-                        "content_type": content_type,
-                        "base_url": str(base_url).rstrip("/"),
-                        "model": model,
-                    },
+                await Runtime.write_file(request, str(cache_audio_path), raw_data)
+                await Runtime.write_file(
+                    request,
+                    str(cache_json_path),
+                    _cache_json(
+                        {
+                            "type": "stt",
+                            "text": text,
+                            "audio_file": cache_audio_path.name,
+                            "filename": filename,
+                            "content_type": content_type,
+                            "base_url": str(base_url).rstrip("/"),
+                            "model": model,
+                        }
+                    ),
                 )
             return {"text": text}
         except httpx.HTTPStatusError as exc:
@@ -402,18 +400,21 @@ async def transcribe(
 
         text = " ".join(r for r in results if r)
         if cache_json_path and cache_audio_path:
-            _write_bytes_atomic(cache_audio_path, raw_data)
-            _write_json_atomic(
-                cache_json_path,
-                {
-                    "type": "stt",
-                    "text": text,
-                    "audio_file": cache_audio_path.name,
-                    "filename": filename,
-                    "content_type": content_type,
-                    "base_url": str(base_url).rstrip("/"),
-                    "model": model,
-                },
+            await Runtime.write_file(request, str(cache_audio_path), raw_data)
+            await Runtime.write_file(
+                request,
+                str(cache_json_path),
+                _cache_json(
+                    {
+                        "type": "stt",
+                        "text": text,
+                        "audio_file": cache_audio_path.name,
+                        "filename": filename,
+                        "content_type": content_type,
+                        "base_url": str(base_url).rstrip("/"),
+                        "model": model,
+                    }
+                ),
             )
         return {"text": text}
 
@@ -491,7 +492,7 @@ async def speech(request: Request, body: SpeechRequest):
         "voice": voice,
         "response_format": fmt,
     }
-    cache_dir = _workspace_audio_cache_dir(body.workspace, "tts")
+    cache_dir = await _workspace_audio_cache_dir(request, body.workspace, "tts")
     cache_audio_path: Path | None = None
     cache_json_path: Path | None = None
     if cache_dir:
@@ -511,19 +512,18 @@ async def speech(request: Request, body: SpeechRequest):
         )
         cache_audio_path = cache_dir / f"{key}.{fmt}"
         cache_json_path = cache_dir / f"{key}.json"
-        if cache_audio_path.exists():
-            try:
-                if cache_audio_path.stat().st_size <= 0:
-                    cache_audio_path.unlink(missing_ok=True)
-                    cache_json_path.unlink(missing_ok=True)
-                else:
-                    return Response(
-                        content=cache_audio_path.read_bytes(),
-                        media_type=_audio_media_type(str(fmt)),
-                        headers={"X-CPTR-Audio-Cache": "hit"},
-                    )
-            except OSError:
-                pass
+        try:
+            cached_audio = await Runtime.read_bytes(request, str(cache_audio_path))
+            if cached_audio["data"]:
+                return Response(
+                    content=cached_audio["data"],
+                    media_type=_audio_media_type(str(fmt)),
+                    headers={"X-CPTR-Audio-Cache": "hit"},
+                )
+            await Runtime.delete_item(request, str(cache_audio_path))
+            await Runtime.delete_item(request, str(cache_json_path))
+        except FileError:
+            pass
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120)) as client:
@@ -548,19 +548,22 @@ async def speech(request: Request, body: SpeechRequest):
 
     cache_state = "disabled"
     if cache_audio_path and cache_json_path:
-        _write_bytes_atomic(cache_audio_path, resp.content)
-        _write_json_atomic(
-            cache_json_path,
-            {
-                "type": "tts",
-                "text": text,
-                "audio_file": cache_audio_path.name,
-                "base_url": base_url,
-                "model": model,
-                "voice": voice,
-                "format": fmt,
-                "content_type": _audio_media_type(str(fmt)),
-            },
+        await Runtime.write_file(request, str(cache_audio_path), resp.content)
+        await Runtime.write_file(
+            request,
+            str(cache_json_path),
+            _cache_json(
+                {
+                    "type": "tts",
+                    "text": text,
+                    "audio_file": cache_audio_path.name,
+                    "base_url": base_url,
+                    "model": model,
+                    "voice": voice,
+                    "format": fmt,
+                    "content_type": _audio_media_type(str(fmt)),
+                }
+            ),
         )
         cache_state = "write"
 

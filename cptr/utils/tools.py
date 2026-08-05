@@ -24,6 +24,14 @@ from typing import Any, Literal, Optional, get_args, get_origin, get_type_hints
 
 from cptr.env import CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS, EXECUTE_TIMEOUT
 from cptr.utils.gitignore import is_gitignored, load_gitignore
+from cptr.utils.identity import (
+    IdentityUnavailable,
+    env_for,
+    expand_user_path,
+    identity_for_context,
+    preexec_for,
+)
+from cptr.utils.runtime import Runtime, FileError
 
 try:
     import fcntl
@@ -62,7 +70,7 @@ MAX_TASK_CONTENT_CHARS = 4000
 _TASK_TRUNCATION_MARKER = "... [truncated]"
 
 
-def _spawn_pty(command: str, cwd: str, env: dict) -> tuple:
+def _spawn_pty(command: str, cwd: str, env: dict, preexec_fn=None) -> tuple:
     """Spawn a command under a PTY (Unix only). Returns (proc, master_fd)."""
     master_fd, slave_fd = pty.openpty()
     try:
@@ -76,6 +84,7 @@ def _spawn_pty(command: str, cwd: str, env: dict) -> tuple:
             cwd=cwd,
             env=env,
             start_new_session=True,
+            preexec_fn=preexec_fn,
         )
     except Exception:
         os.close(slave_fd)
@@ -321,9 +330,20 @@ def _command_session_snapshot(command_session_id: str, session: dict) -> dict[st
 
 
 def list_command_sessions(
-    workspace: str | None = None, chat_id: str | None = None
+    request,
+    workspace: str | None = None,
+    chat_id: str | None = None,
+    auth=None,
+    context: dict | None = None,
 ) -> list[dict[str, Any]]:
     sessions: list[dict[str, Any]] = []
+    if context and context.get("request") is not None:
+        request = context["request"]
+    if request is not None:
+        auth = getattr(getattr(request, "state", None), "auth", None)
+    user_id = getattr(auth, "user_id", None) if auth is not None else None
+    if user_id is None and context:
+        user_id = context.get("user_id")
     for command_session_id, session in command_sessions.items():
         if session.get("done"):
             continue
@@ -331,13 +351,30 @@ def list_command_sessions(
             continue
         if chat_id and session.get("chat_id") != chat_id:
             continue
+        if user_id is not None and session.get("user_id") != user_id:
+            continue
         sessions.append(_command_session_snapshot(command_session_id, session))
     sessions.sort(key=lambda item: (item["status"] != "running", -float(item["created_at"] or 0)))
     return sessions
 
 
-def get_command_session(command_session_id: str) -> dict | None:
-    return command_sessions.get(command_session_id)
+def get_command_session(
+    request,
+    command_session_id: str = "",
+    auth=None,
+    context: dict | None = None,
+) -> dict | None:
+    session = command_sessions.get(command_session_id)
+    if context and context.get("request") is not None:
+        request = context["request"]
+    if request is not None:
+        auth = getattr(getattr(request, "state", None), "auth", None)
+    user_id = getattr(auth, "user_id", None) if auth is not None else None
+    if user_id is None and context:
+        user_id = context.get("user_id")
+    if not session or (user_id is not None and session.get("user_id") != user_id):
+        return None
+    return session
 
 
 def command_session_bytes_since(session: dict, offset: int) -> tuple[bytes, int]:
@@ -351,8 +388,10 @@ def command_session_bytes_since(session: dict, offset: int) -> tuple[bytes, int]
     return raw, total
 
 
-def send_command_session_input(command_session_id: str, data: bytes) -> str | None:
-    session = command_sessions.get(command_session_id)
+def send_command_session_input(
+    request, command_session_id: str, data: bytes, **scope
+) -> str | None:
+    session = get_command_session(request, command_session_id, **scope)
     if not session:
         return "command session not found"
     if session.get("done"):
@@ -378,16 +417,16 @@ def send_command_session_input(command_session_id: str, data: bytes) -> str | No
     return None
 
 
-async def drain_command_session_input(command_session_id: str) -> None:
-    session = command_sessions.get(command_session_id)
+async def drain_command_session_input(request, command_session_id: str, **scope) -> None:
+    session = get_command_session(request, command_session_id, **scope)
     proc = session.get("proc") if session else None
     stdin = getattr(proc, "stdin", None)
     if stdin is not None and hasattr(stdin, "drain"):
         await stdin.drain()
 
 
-def resize_command_session(command_session_id: str, rows: int, cols: int) -> None:
-    session = command_sessions.get(command_session_id)
+def resize_command_session(request, command_session_id: str, rows: int, cols: int, **scope) -> None:
+    session = get_command_session(request, command_session_id, **scope)
     if not session or session.get("done"):
         return
     master_fd = session.get("master_fd")
@@ -400,8 +439,10 @@ def resize_command_session(command_session_id: str, rows: int, cols: int) -> Non
         pass
 
 
-def stop_command_session(command_session_id: str, force: bool = False) -> str | None:
-    session = command_sessions.get(command_session_id)
+def stop_command_session(
+    request, command_session_id: str, force: bool = False, **scope
+) -> str | None:
+    session = get_command_session(request, command_session_id, **scope)
     if not session:
         return "command session not found"
     if session.get("done"):
@@ -444,12 +485,15 @@ def _read_image_file(full: Path, path: str) -> str:
     using Pillow.  Falls back to a text error if Pillow is unavailable
     and the file is too large.
     """
+    return _read_image_data(full.read_bytes(), full.suffix, path)
+
+
+def _read_image_data(data: bytes, suffix: str, path: str) -> str:
     import base64
 
-    size = full.stat().st_size
-    ext = full.suffix.lower()
+    size = len(data)
+    ext = suffix.lower()
     media_type = _IMAGE_MIME.get(ext, "image/png")
-    data = full.read_bytes()
 
     if size > _IMAGE_MAX_BYTES:
         try:
@@ -484,7 +528,7 @@ def _read_image_file(full: Path, path: str) -> str:
                     break
                 scale *= 0.7  # more aggressive on each pass
             else:
-                return f"Error: image too large ({_human_size(full.stat().st_size)}) and could not be resized below 5MB."
+                return f"Error: image too large ({_human_size(size)}) and could not be resized below 5MB."
         except ImportError:
             return (
                 f"Error: image file is too large ({_human_size(size)}). "
@@ -503,7 +547,7 @@ async def read_file(
     start_line: int = 0,
     end_line: int = 0,
     *,
-    workspace: str,
+    __context__: dict,
 ) -> str:
     """Read file contents with optional line range. Lines are 1-indexed.
     Supports relative workspace paths, absolute paths, and ~/ paths.
@@ -512,7 +556,13 @@ async def read_file(
     :param start_line: First line to read (1-indexed, 0 = from beginning).
     :param end_line: Last line to read (inclusive, 0 = to end of file).
     """
-    p = Path(path).expanduser()
+    workspace = __context__["workspace"]
+    try:
+        identity = await identity_for_context(__context__)
+    except IdentityUnavailable as e:
+        return f"Error: {e}"
+
+    p = expand_user_path(path, identity)
     if p.is_absolute():
         full = p.resolve()
     else:
@@ -525,64 +575,54 @@ async def read_file(
         return _DOTENV_ERROR
 
     resolved = full.resolve()
-    home = Path.home().resolve()
+    home = Path(identity.home).resolve()
     home_rel = resolved.relative_to(home).as_posix() if resolved.is_relative_to(home) else ""
     if home_rel in _SENSITIVE_HOME_FILES or any(
         home_rel == d or home_rel.startswith(f"{d}/") for d in _SENSITIVE_HOME_DIRS
     ):
         return _SENSITIVE_READ_ERROR
 
+    request = __context__.get("request")
     try:
-        mode = full.stat().st_mode
-    except OSError:
-        mode = 0
+        file_stat = await Runtime.stat(request or identity, str(full))
+    except FileError:
+        return f"Error: file not found: {path}"
+
+    mode = int(file_stat.get("mode") or 0)
     if any(check(mode) for check in (stat.S_ISBLK, stat.S_ISCHR, stat.S_ISFIFO, stat.S_ISSOCK)):
         return f"Error: cannot read special file: {full}"
 
-    if not full.is_file():
+    if file_stat.get("type") != "file":
         return f"Error: file not found: {path}"
 
     # Image files: return base64 JSON instead of garbled text
     if full.suffix.lower() in IMAGE_EXTENSIONS:
-        return await asyncio.to_thread(_read_image_file, full, path)
-
-    def _read():
-        size = full.stat().st_size
-        if size > 500_000:
-            return f"Error: file too large ({size} bytes, max 500KB)"
-
-        # Try strict text decoding first
         try:
-            content = full.read_text(errors="strict")
-        except (UnicodeDecodeError, ValueError):
-            # Binary file — try document extraction (PDF, DOCX, XLSX, etc.)
-            try:
-                from cptr.utils.documents import extract_by_path
+            image = await Runtime.read_bytes(request or identity, str(full))
+        except FileError as e:
+            return f"Error: {e}"
+        return await asyncio.to_thread(_read_image_data, image["data"], full.suffix, path)
 
-                text = extract_by_path(str(full))
-                if text:
-                    lines = text.splitlines()
-                    total = len(lines)
-                    if start_line > 0 or end_line > 0:
-                        s = max(1, start_line) - 1
-                        e = min(total, end_line) if end_line > 0 else total
-                        selected = lines[s:e]
-                        numbered = [f"{i + s + 1}: {line}" for i, line in enumerate(selected)]
-                        return f"File: {path} | Lines {s + 1}-{e} of {total}\n" + "\n".join(
-                            numbered
-                        )
-                    capped = lines[:800]
-                    numbered = [f"{i + 1}: {line}" for i, line in enumerate(capped)]
-                    header = f"File: {path} | Total lines: {total}"
-                    if total > 800:
-                        header += " (showing first 800)"
-                    return header + "\n" + "\n".join(numbered)
-            except ImportError as e:
-                return f"Error: reading {full.suffix} files requires: {e}"
-            except Exception as e:
-                return f"Error: failed to extract text from {path}: {e}"
+    size = int(file_stat.get("size") or 0)
+    if size > 500_000:
+        return f"Error: file too large ({size} bytes, max 500KB)"
+
+    try:
+        file_data = await Runtime.read_file(request or identity, str(full))
+    except FileError as e:
+        return f"Error: {e}"
+    if file_data.get("binary"):
+        try:
+            extracted = await Runtime.extract_text(request or identity, str(full))
+        except FileError as e:
+            return f"Error: {e}"
+        content = str(extracted.get("text") or "")
+        if not content:
             return f"Error: binary file ({full.suffix}), cannot read as text"
+    else:
+        content = str(file_data.get("content") or "")
 
+    def _format_text():
         lines = content.splitlines()
         total = len(lines)
 
@@ -602,69 +642,28 @@ async def read_file(
                 header += " (showing first 800)"
             return header + "\n" + "\n".join(numbered)
 
-    return await asyncio.to_thread(_read)
+    return await asyncio.to_thread(_format_text)
 
 
 async def list_directory(
     path: str = ".",
     recursive: bool = False,
     *,
-    workspace: str,
+    __context__: dict,
 ) -> str:
     """List files and directories with metadata (sizes, child counts).
     :param path: Directory path relative to workspace root.
     :param recursive: Whether to list recursively.
     """
-    full = _resolve_path(path, workspace)
-    if not full.is_dir():
-        return f"Error: not a directory: {path}"
-
-    def _list():
-        ignore = {
-            ".git",
-            "node_modules",
-            "__pycache__",
-            ".venv",
-            "venv",
-            ".next",
-            "build",
-            "dist",
-            ".cptr",
-            ".svelte-kit",
-        }
-        entries = []
-
-        if recursive:
-            for root, dirs, files in os.walk(full):
-                dirs[:] = sorted(d for d in dirs if d not in ignore)
-                rel = Path(root).relative_to(full)
-                for f in sorted(files):
-                    fpath = Path(root) / f
-                    try:
-                        sz = fpath.stat().st_size
-                    except OSError:
-                        sz = 0
-                    entries.append(f"{rel / f}  ({_human_size(sz)})")
-        else:
-            for item in sorted(full.iterdir()):
-                if item.name in ignore:
-                    continue
-                if item.is_dir():
-                    try:
-                        count = sum(1 for _ in item.rglob("*") if _.is_file())
-                    except (PermissionError, OSError):
-                        count = 0
-                    entries.append(f"{item.name}/  ({count} files)")
-                else:
-                    try:
-                        sz = item.stat().st_size
-                    except OSError:
-                        sz = 0
-                    entries.append(f"{item.name}  ({_human_size(sz)})")
-
-        return "\n".join(entries) if entries else "(empty directory)"
-
-    res = await asyncio.to_thread(_list)
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    try:
+        identity = None if request is not None else await identity_for_context(__context__)
+        full = _resolve_path(path, workspace)
+        result = await Runtime.list_tree(request or identity, str(full), recursive)
+    except (ValueError, FileError, IdentityUnavailable) as e:
+        return f"Error: {e}"
+    res = str(result.get("text") or "")
     return _truncate_output(res, max_chars=CHAT_TOOL_MAX_CHARS)
 
 
@@ -676,7 +675,7 @@ async def search_files(
     include: str = "",
     filenames_only: bool = False,
     *,
-    workspace: str,
+    __context__: dict,
 ) -> str:
     """Search files for a pattern using ripgrep. Fast, respects .gitignore.
     :param query: Search pattern (plain text or regex).
@@ -686,22 +685,56 @@ async def search_files(
     :param include: Glob pattern to filter files (e.g. '*.py', '*.ts').
     :param filenames_only: Only return filenames, not matching lines.
     """
-    full = _resolve_path(path, workspace)
-    if not full.is_dir():
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    try:
+        identity = None if request is not None else await identity_for_context(__context__)
+        full = _resolve_path(path, workspace)
+        directory = await Runtime.stat(request or identity, str(full))
+    except (ValueError, FileError, IdentityUnavailable) as e:
+        return f"Error: {e}"
+    if directory.get("type") != "directory":
         return f"Error: not a directory: {path}"
 
     # Try ripgrep first
     try:
-        res = await _search_rg(query, full, regex, case_insensitive, include, filenames_only)
+        res = await _search_rg(
+            query,
+            full,
+            regex,
+            case_insensitive,
+            include,
+            filenames_only,
+            await identity_for_context(__context__),
+        )
     except FileNotFoundError:
-        # ripgrep not installed, fall back to Python
-        res = await _search_python(query, full, case_insensitive)
+        try:
+            matches = await Runtime.file_matches(
+                request or identity, query, str(full), False, 0, 50
+            )
+        except FileError as e:
+            return f"Error: {e}"
+        rows = []
+        for item in matches.get("results", []):
+            rel = item.get("relative_path") or item.get("name") or ""
+            if filenames_only or item.get("name_match"):
+                rows.append(str(rel))
+            else:
+                for match in item.get("content_matches") or []:
+                    rows.append(f"{rel}:{match.get('line')}: {match.get('text')}")
+        res = "\n".join(rows) if rows else "No matches found."
 
     return _truncate_output(res, max_chars=CHAT_TOOL_MAX_CHARS)
 
 
 async def _search_rg(
-    query: str, full: Path, regex: bool, case_insensitive: bool, include: str, filenames_only: bool
+    query: str,
+    full: Path,
+    regex: bool,
+    case_insensitive: bool,
+    include: str,
+    filenames_only: bool,
+    identity,
 ) -> str:
     """Search using ripgrep."""
     args = ["rg", "--no-heading", "--max-count=50", "--color=never"]
@@ -727,6 +760,8 @@ async def _search_rg(
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env_for(identity, full) if identity.is_pam else None,
+        preexec_fn=preexec_for(identity) if identity.is_pam else None,
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
     output = stdout.decode(errors="replace").strip()
@@ -805,7 +840,7 @@ async def create_file(
     overwrite: bool = False,
     artifact_type: str = "",
     *,
-    workspace: str,
+    __context__: dict,
 ) -> str:
     """Create a new file, or create an artifact for user review.
     When artifact_type is set, path is optional. The artifact is saved automatically.
@@ -814,6 +849,15 @@ async def create_file(
     :param overwrite: Set to true to overwrite an existing file.
     :param artifact_type: Set to 'implementation_plan' to present a plan for user review before coding.
     """
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    identity = None
+    if request is None:
+        try:
+            identity = await identity_for_context(__context__)
+        except IdentityUnavailable as e:
+            return f"Error: {e}"
+
     # Artifact mode: save to .cptr/artifacts/ (same location as create_artifact)
     # When artifact_type is set, path is ignored.
     if artifact_type:
@@ -821,13 +865,15 @@ async def create_file(
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         artifact_dir = Path(workspace) / ".cptr" / "artifacts"
-        artifact_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_dir / f"{ts}_{artifact_type}.md"
 
-        def _write_artifact():
-            artifact_path.write_text(content, encoding="utf-8")
-
-        await asyncio.to_thread(_write_artifact)
+        try:
+            if request is not None:
+                await Runtime.write_file(request, str(artifact_path), content)
+            else:
+                await Runtime.write_file(identity, str(artifact_path), content)
+        except FileError as e:
+            return f"Error: {e}"
 
         rel_path = str(artifact_path.relative_to(Path(workspace)))
         display_title = artifact_type.replace("_", " ").title()
@@ -849,11 +895,13 @@ async def create_file(
     if full.is_file() and not overwrite:
         return f"Error: file already exists: {path}. Use overwrite=true or edit_file to modify."
 
-    def _write():
-        full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(content, encoding="utf-8")
-
-    await asyncio.to_thread(_write)
+    try:
+        if request is not None:
+            await Runtime.write_file(request, str(full), content)
+        else:
+            await Runtime.write_file(identity, str(full), content)
+    except FileError as e:
+        return f"Error: {e}"
     return f"Created {path} ({len(content)} bytes, {len(content.splitlines())} lines)"
 
 
@@ -862,7 +910,7 @@ async def create_artifact(
     artifact_type: str = "implementation_plan",
     title: str = "",
     *,
-    workspace: str,
+    __context__: dict,
 ) -> str:
     """Create an artifact for user review. Use for implementation plans and analysis.
     :param content: Artifact content as markdown.
@@ -871,16 +919,26 @@ async def create_artifact(
     """
     from datetime import datetime, timezone
 
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    identity = None
+    if request is None:
+        try:
+            identity = await identity_for_context(__context__)
+        except IdentityUnavailable as e:
+            return f"Error: {e}"
     artifact_type = artifact_type or "implementation_plan"
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     artifact_dir = Path(workspace) / ".cptr" / "artifacts"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = artifact_dir / f"{ts}_{artifact_type}.md"
 
-    def _write():
-        artifact_path.write_text(content, encoding="utf-8")
-
-    await asyncio.to_thread(_write)
+    try:
+        if request is not None:
+            await Runtime.write_file(request, str(artifact_path), content)
+        else:
+            await Runtime.write_file(identity, str(artifact_path), content)
+    except FileError as e:
+        return f"Error: {e}"
 
     display_title = title or artifact_type.replace("_", " ").title()
     rel_path = str(artifact_path.relative_to(Path(workspace)))
@@ -1019,30 +1077,46 @@ async def clear_active_tasks(
         )
 
 
-async def write_file(path: str, content: str, *, workspace: str) -> str:
+async def write_file(path: str, content: str, *, __context__: dict) -> str:
     """Write or create a file (full content). Prefer edit_file for modifications.
     :param path: Path relative to workspace root.
     :param content: File contents to write.
     """
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    identity = None
+    if request is None:
+        try:
+            identity = await identity_for_context(__context__)
+        except IdentityUnavailable as e:
+            return f"Error: {e}"
     full = _resolve_path(path, workspace)
     if _is_dotenv(full):
         return _DOTENV_ERROR
 
-    def _write():
-        full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(content, encoding="utf-8")
-
-    await asyncio.to_thread(_write)
+    try:
+        if request is not None:
+            await Runtime.write_file(request, str(full), content)
+        else:
+            await Runtime.write_file(identity, str(full), content)
+    except FileError as e:
+        return f"Error: {e}"
     return f"Wrote {len(content)} bytes to {path}"
 
 
-async def display_file(path: str, *, workspace: str) -> str:
+async def display_file(path: str, *, __context__: dict) -> str:
     """Display a workspace file inline in chat.
     Use when the user asks to see, preview, render, or display a file you created or found.
     :param path: Path relative to workspace root.
     """
     if not path:
         return "Error: path is required."
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    try:
+        identity = None if request is not None else await identity_for_context(__context__)
+    except IdentityUnavailable as e:
+        return f"Error: {e}"
 
     try:
         full = _resolve_path(path, workspace)
@@ -1051,12 +1125,13 @@ async def display_file(path: str, *, workspace: str) -> str:
 
     if _is_dotenv(full):
         return _DOTENV_ERROR
-    if not full.exists():
+    try:
+        file_stat = await Runtime.stat(request or identity, str(full))
+    except FileError:
         return f"Error: file not found: {path}"
-    if not full.is_file():
+    if file_stat.get("type") != "file":
         return f"Error: not a file: {path}"
 
-    stat = await asyncio.to_thread(full.stat)
     mime_type = mimetypes.guess_type(str(full))[0] or "application/octet-stream"
     ws = Path(workspace).resolve()
     try:
@@ -1070,7 +1145,7 @@ async def display_file(path: str, *, workspace: str) -> str:
             "full_path": str(full),
             "workspace": str(ws),
             "name": full.name,
-            "size": stat.st_size,
+            "size": file_stat.get("size") or 0,
             "mime_type": mime_type,
             "kind": _file_kind(full, mime_type),
         },
@@ -1085,7 +1160,7 @@ async def edit_file(
     start_line: int = 0,
     end_line: int = 0,
     *,
-    workspace: str,
+    __context__: dict,
 ) -> str:
     """Replace a specific text block in a file. Only provide the text that changes.
     :param path: Path relative to workspace root.
@@ -1094,51 +1169,66 @@ async def edit_file(
     :param start_line: Narrow search to lines starting here (1-indexed, 0 = from start).
     :param end_line: Narrow search to lines ending here (0 = to end).
     """
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    identity = None
+    if request is None:
+        try:
+            identity = await identity_for_context(__context__)
+        except IdentityUnavailable as e:
+            return f"Error: {e}"
     full = _resolve_path(path, workspace)
     if _is_dotenv(full):
         return _DOTENV_ERROR
-    if not full.is_file():
-        return f"Error: file not found: {path}"
-
-    def _edit():
-        content = full.read_text(encoding="utf-8", errors="replace")
-
-        if start_line > 0 or end_line > 0:
-            lines = content.splitlines(keepends=True)
-            total = len(lines)
-            s = max(1, start_line) - 1
-            e = min(total, end_line) if end_line > 0 else total
-            region = "".join(lines[s:e])
-
-            if target not in region:
-                return f"Error: target text not found in lines {s + 1}-{e} of {path}"
-
-            count = region.count(target)
-            if count > 1:
-                return (
-                    f"Error: target text found {count} times in lines {s + 1}-{e}. "
-                    f"Narrow the line range or use a more specific target."
-                )
-
-            new_region = region.replace(target, replacement, 1)
-            new_content = "".join(lines[:s]) + new_region + "".join(lines[e:])
+    try:
+        if request is not None:
+            file_data = await Runtime.read_file(request, str(full))
         else:
-            count = content.count(target)
-            if count == 0:
-                return f"Error: target text not found in {path}"
-            if count > 1:
-                return (
-                    f"Error: target text found {count} times in {path}. "
-                    f"Use start_line/end_line to disambiguate."
-                )
-            new_content = content.replace(target, replacement, 1)
+            file_data = await Runtime.read_file(identity, str(full))
+    except FileError:
+        return f"Error: file not found: {path}"
+    if file_data.get("binary"):
+        return f"Error: not a text file: {path}"
 
-        full.write_text(new_content, encoding="utf-8")
-        return None  # success sentinel
+    content = str(file_data.get("content") or "")
 
-    result = await asyncio.to_thread(_edit)
-    if result is not None:
-        return result
+    if start_line > 0 or end_line > 0:
+        lines = content.splitlines(keepends=True)
+        total = len(lines)
+        s = max(1, start_line) - 1
+        e = min(total, end_line) if end_line > 0 else total
+        region = "".join(lines[s:e])
+
+        if target not in region:
+            return f"Error: target text not found in lines {s + 1}-{e} of {path}"
+
+        count = region.count(target)
+        if count > 1:
+            return (
+                f"Error: target text found {count} times in lines {s + 1}-{e}. "
+                f"Narrow the line range or use a more specific target."
+            )
+
+        new_region = region.replace(target, replacement, 1)
+        new_content = "".join(lines[:s]) + new_region + "".join(lines[e:])
+    else:
+        count = content.count(target)
+        if count == 0:
+            return f"Error: target text not found in {path}"
+        if count > 1:
+            return (
+                f"Error: target text found {count} times in {path}. "
+                f"Use start_line/end_line to disambiguate."
+            )
+        new_content = content.replace(target, replacement, 1)
+
+    try:
+        if request is not None:
+            await Runtime.write_file(request, str(full), new_content)
+        else:
+            await Runtime.write_file(identity, str(full), new_content)
+    except FileError as e:
+        return f"Error: {e}"
 
     target_lines = len(target.splitlines())
     replacement_lines = len(replacement.splitlines())
@@ -1152,17 +1242,32 @@ async def multi_edit_file(
     path: str,
     edits: str,
     *,
-    workspace: str,
+    __context__: dict,
 ) -> str:
     """Apply multiple non-contiguous edits to a file in one operation.
     :param path: Path relative to workspace root.
     :param edits: JSON array of edit objects, each with 'target' and 'replacement' strings, and optional 'start_line'/'end_line' integers.
     """
+    workspace = __context__["workspace"]
+    request = __context__.get("request")
+    identity = None
+    if request is None:
+        try:
+            identity = await identity_for_context(__context__)
+        except IdentityUnavailable as e:
+            return f"Error: {e}"
     full = _resolve_path(path, workspace)
     if _is_dotenv(full):
         return _DOTENV_ERROR
-    if not full.is_file():
+    try:
+        if request is not None:
+            file_data = await Runtime.read_file(request, str(full))
+        else:
+            file_data = await Runtime.read_file(identity, str(full))
+    except FileError:
         return f"Error: file not found: {path}"
+    if file_data.get("binary"):
+        return f"Error: not a text file: {path}"
 
     try:
         edit_list = json.loads(edits)
@@ -1172,34 +1277,37 @@ async def multi_edit_file(
     if not isinstance(edit_list, list) or not edit_list:
         return "Error: edits must be a non-empty JSON array"
 
-    def _apply():
-        content = full.read_text(encoding="utf-8", errors="replace")
-        applied = 0
+    content = str(file_data.get("content") or "")
+    applied = 0
 
-        for i, edit in enumerate(edit_list):
-            target = edit.get("target", "")
-            replacement = edit.get("replacement", "")
+    for i, edit in enumerate(edit_list):
+        target = edit.get("target", "")
+        replacement = edit.get("replacement", "")
 
-            if not target:
-                return f"Error: edit {i + 1} missing 'target'"
+        if not target:
+            return f"Error: edit {i + 1} missing 'target'"
 
-            if target not in content:
-                return f"Error: target not found for edit {i + 1}: {target[:100]}..."
+        if target not in content:
+            return f"Error: target not found for edit {i + 1}: {target[:100]}..."
 
-            count = content.count(target)
-            if count > 1:
-                return (
-                    f"Error: edit {i + 1} target found {count} times. "
-                    f"Each target must be unique in the file."
-                )
+        count = content.count(target)
+        if count > 1:
+            return (
+                f"Error: edit {i + 1} target found {count} times. "
+                f"Each target must be unique in the file."
+            )
 
-            content = content.replace(target, replacement, 1)
-            applied += 1
+        content = content.replace(target, replacement, 1)
+        applied += 1
 
-        full.write_text(content, encoding="utf-8")
-        return f"Applied {applied} edits to {path}"
-
-    return await asyncio.to_thread(_apply)
+    try:
+        if request is not None:
+            await Runtime.write_file(request, str(full), content)
+        else:
+            await Runtime.write_file(identity, str(full), content)
+    except FileError as e:
+        return f"Error: {e}"
+    return f"Applied {applied} edits to {path}"
 
 
 async def run_command(
@@ -1215,21 +1323,40 @@ async def run_command(
     :param wait: Seconds to wait for the command to finish before returning (max 300). Returns early if done sooner. Null returns immediately. Use 30-60 for installs and builds, 5-10 for quick commands, null or 0 for long-lived servers.
     """
     workspace = __context__["workspace"]
+    try:
+        identity = await identity_for_context(__context__)
+    except IdentityUnavailable as e:
+        return f"Error: {e}"
+    user_id = identity.app_user_id or __context__.get("user_id")
+    request = __context__.get("request")
+
     work_dir = _resolve_path(cwd, workspace)
     if not work_dir.is_dir():
         return f"Error: not a directory: {cwd}"
 
-    active = sum(1 for t in command_sessions.values() if not t.get("done"))
+    active = sum(
+        1
+        for t in command_sessions.values()
+        if not t.get("done") and (user_id is None or t.get("user_id") == user_id)
+    )
     if active >= MAX_COMMAND_SESSIONS:
         return f"Error: too many running command sessions ({active}/{MAX_COMMAND_SESSIONS}). Stop one first."
 
-    env = {**os.environ, "PAGER": "cat", "GIT_PAGER": "cat"}
+    if identity.is_pam:
+        env = env_for(identity, work_dir, {"PAGER": "cat", "GIT_PAGER": "cat"})
+        preexec = preexec_for(identity)
+    else:
+        env = {**os.environ, "PAGER": "cat", "GIT_PAGER": "cat"}
+        preexec = None
     master_fd = None
 
     try:
         if _PTY_AVAILABLE:
-            proc, master_fd = _spawn_pty(command, str(work_dir), env)
+            proc, master_fd = _spawn_pty(command, str(work_dir), env, preexec)
         else:
+            kwargs = {}
+            if preexec is not None:
+                kwargs["preexec_fn"] = preexec
             proc = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
@@ -1237,14 +1364,24 @@ async def run_command(
                 stdin=asyncio.subprocess.PIPE,
                 cwd=str(work_dir),
                 env=env,
+                **kwargs,
             )
     except Exception as e:
         return f"Error: {e}"
 
     command_session_id = uuid.uuid4().hex[:8]
-    log_dir = Path(workspace) / ".cptr" / "task_logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"{command_session_id}.jsonl"
+    log_path = Path(workspace) / ".cptr" / "task_logs" / f"{command_session_id}.jsonl"
+    try:
+        if request is not None:
+            await Runtime.write_file(request, str(log_path), "")
+        else:
+            await Runtime.write_file(identity, str(log_path), "")
+    except FileError as e:
+        try:
+            _kill_process_group(proc.pid)
+        except Exception:
+            pass
+        return f"Error: {e}"
 
     command_sessions[command_session_id] = {
         "command_session_id": command_session_id,
@@ -1254,6 +1391,8 @@ async def run_command(
         "total_bytes": 0,
         "command": command,
         "workspace": workspace,
+        "user_id": user_id,
+        "identity": identity,
         "chat_id": __context__.get("chat_id"),
         "message_id": __context__.get("message_id"),
         "call_id": __context__.get("call_id"),
@@ -1292,16 +1431,22 @@ async def run_command(
 
 
 async def check_task(
-    task_id: str, offset: int = 0, wait: Optional[int] = None, *, workspace: str
+    task_id: str, offset: int = 0, wait: Optional[int] = None, *, __context__: dict
 ) -> str:
     """Check status and recent output of a background task.
     :param task_id: The task ID returned by run_command.
     :param offset: Byte offset from previous check. Pass next_offset from the last response to get only new output.
     :param wait: Seconds to wait for the task to finish before returning (max 300). Returns early if done sooner. Null returns immediately.
     """
-    task = command_sessions.get(task_id)
+    request = __context__.get("request")
+    task = get_command_session(request, task_id, context=__context__)
     if not task:
-        available = list(command_sessions.keys())
+        user_id = __context__.get("user_id")
+        available = [
+            session_id
+            for session_id, session in command_sessions.items()
+            if session.get("user_id") == user_id
+        ]
         return f"Error: no task with id '{task_id}'. Active tasks: {available or 'none'}"
 
     # Optionally wait for the task to finish
@@ -1339,34 +1484,46 @@ async def check_task(
     return f"Task {task_id}: {status}\nCommand: {task['command']}\nnext_offset: {next_offset}\n---\n{output}"
 
 
-async def kill_task(task_id: str, force: bool = False, *, workspace: str) -> str:
+async def kill_task(task_id: str, force: bool = False, *, __context__: dict) -> str:
     """Terminate a running task. Sends SIGTERM for graceful shutdown by default.
     :param task_id: The task ID to kill.
     :param force: Send SIGKILL instead of SIGTERM for immediate termination.
     """
-    task = command_sessions.get(task_id)
+    request = __context__.get("request")
+    task = get_command_session(request, task_id, context=__context__)
     if not task:
-        available = list(command_sessions.keys())
+        user_id = __context__.get("user_id")
+        available = [
+            session_id
+            for session_id, session in command_sessions.items()
+            if session.get("user_id") == user_id
+        ]
         return f"Error: no task with id '{task_id}'. Active tasks: {available or 'none'}"
 
     if task.get("done", False):
         exit_code = task.get("exit_code")
         return f"Task {task_id} already finished (code {exit_code})"
 
-    stop_command_session(task_id, force=force)
+    stop_command_session(request, task_id, force=force, context=__context__)
 
     action = "Killed" if force else "Terminated"
     return f"{action} task {task_id}"
 
 
-async def send_input(task_id: str, input: str, *, workspace: str) -> str:
+async def send_input(task_id: str, input: str, *, __context__: dict) -> str:
     """Send input to a running task's stdin. Use for interactive prompts, REPLs, or control characters.
     :param task_id: The task ID returned by run_command.
     :param input: Text to send. Use \\n for Enter, \\x03 for Ctrl-C, \\x04 for Ctrl-D.
     """
-    task = command_sessions.get(task_id)
+    request = __context__.get("request")
+    task = get_command_session(request, task_id, context=__context__)
     if not task:
-        available = list(command_sessions.keys())
+        user_id = __context__.get("user_id")
+        available = [
+            session_id
+            for session_id, session in command_sessions.items()
+            if session.get("user_id") == user_id
+        ]
         return f"Error: no task '{task_id}'. Active: {available or 'none'}"
 
     if task.get("done", False):
@@ -1378,10 +1535,10 @@ async def send_input(task_id: str, input: str, *, workspace: str) -> str:
     except (UnicodeDecodeError, ValueError):
         text = input
 
-    error = send_command_session_input(task_id, text.encode())
+    error = send_command_session_input(request, task_id, text.encode(), context=__context__)
     if error:
         return f"Error: {error} for task {task_id}"
-    await drain_command_session_input(task_id)
+    await drain_command_session_input(request, task_id, context=__context__)
 
     return f"Sent {len(text)} bytes to task {task_id}"
 
@@ -1919,14 +2076,21 @@ async def browser_screenshot(
 
     # Save to workspace
     workspace = __context__.get("workspace", ".")
-    screenshots_dir = Path(workspace) / ".cptr" / "screenshots"
-    screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     import time
 
     filename = f"screenshot_{int(time.time())}.png"
-    filepath = screenshots_dir / filename
-    filepath.write_bytes(png_bytes)
+    filepath = Path(workspace) / ".cptr" / "screenshots" / filename
+    request = __context__.get("request")
+    try:
+        if request is not None:
+            await Runtime.write_file(request, str(filepath), png_bytes)
+        else:
+            await Runtime.write_file(
+                await identity_for_context(__context__), str(filepath), png_bytes
+            )
+    except FileError as e:
+        return f"Error: {e}"
 
     return f"Screenshot saved: {filepath}"
 
@@ -2627,6 +2791,7 @@ async def _run_existing_subagent_chat(
     from cptr.utils.model_targets import ApiModelTarget
 
     await run_chat_task(
+        None,
         message_id=assistant_msg_id,
         chat_id=chat_id,
         user_id=user_id,

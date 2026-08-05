@@ -151,7 +151,11 @@ async def login(request: Request, body: LoginRequest):
         user_id = await get_or_create_user(body.username)
         user = await User.get_by_id(user_id)
         if user and user.role == "pending":
-            return JSONResponse({"error": "account pending approval"}, 403)
+            role = (
+                "admin" if not any(u["role"] == "admin" for u in await User.list_all()) else "user"
+            )
+            await User.update_role(user_id, role)
+            user.role = role
         return _ok_with_cookie(
             create_token(user_id, body.username, role=user.role if user else "user"),
             {"ok": True, "username": body.username},

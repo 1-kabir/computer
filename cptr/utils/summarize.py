@@ -67,6 +67,7 @@ async def summarize_messages(
         from cptr.utils.ai import generate_text
 
         result = await generate_text(
+            None,
             model_id=await Config.get("chat.context_compaction.model"),
             active_connection=connection,
             active_model=model,

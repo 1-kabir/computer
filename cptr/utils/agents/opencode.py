@@ -24,6 +24,7 @@ from cptr.utils.agents.events import (
     AgentToolUpdate,
 )
 from cptr.utils.agents.prompts import turn_prompt_text
+from cptr.utils.identity import env_for, preexec_for
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -71,13 +72,17 @@ async def _server_url_from_stdout(proc: asyncio.subprocess.Process, port: int) -
 
 
 @asynccontextmanager
-async def _opencode_server(profile: dict[str, Any], workspace: str):
+async def _opencode_server(profile: dict[str, Any], workspace: str, identity=None):
     server_url = str(profile.get("server_url") or "").strip()
     if server_url:
         yield server_url, None
         return
 
-    env = os.environ.copy()
+    env = (
+        env_for(identity, workspace or os.getcwd())
+        if identity and identity.is_pam
+        else os.environ.copy()
+    )
     if profile.get("home"):
         env["HOME"] = os.path.expanduser(str(profile["home"]))
     port = _free_port()
@@ -90,6 +95,7 @@ async def _opencode_server(profile: dict[str, Any], workspace: str):
         stderr=asyncio.subprocess.PIPE,
         cwd=workspace or os.getcwd(),
         env={**env, "OPENCODE_CONFIG_CONTENT": "{}"},
+        preexec_fn=preexec_for(identity) if identity and identity.is_pam else None,
     )
     stderr_task = asyncio.create_task(_drain_stderr(proc))
     try:
@@ -330,10 +336,11 @@ async def run_opencode_agent(
     chat_params: dict[str, Any],
     resume_state: dict[str, Any] | None,
     attachments: PreparedAgentAttachments,
+    identity=None,
 ) -> AsyncIterator[AgentEvent]:
     del chat_params
     try:
-        async with _opencode_server(profile, workspace) as (server_url, _proc):
+        async with _opencode_server(profile, workspace, identity) as (server_url, _proc):
             headers = _headers(profile)
             urls = opencode_server_url_candidates(server_url)
             last_connect_error: Exception | None = None
@@ -391,7 +398,10 @@ async def run_opencode_agent(
                                                 timeout=5,
                                             )
                                             status = _session_data(payload).get(session_id)
-                                            if not isinstance(status, dict) or status.get("type") == "idle":
+                                            if (
+                                                not isinstance(status, dict)
+                                                or status.get("type") == "idle"
+                                            ):
                                                 break
                                         if asyncio.get_running_loop().time() - last_activity >= 600:
                                             raise RuntimeError(

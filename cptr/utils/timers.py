@@ -184,6 +184,7 @@ async def _launch_timer(timer, app) -> None:
             },
         )
         start_task(
+            None,
             message_id=assistant_msg.id,
             chat_id=parent.id,
             user_id=timer.user_id,

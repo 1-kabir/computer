@@ -18,8 +18,8 @@ from cptr.models import Chat, ChatMessage, Config, is_internal_chat
 from cptr.utils.config import check_access, now_ms, _get_jwt_secret
 from cptr.utils.crypto import decrypt_key
 from cptr.utils.db import get_db
-from cptr.utils.workspace import ensure_cptr_gitignored
 from cptr.utils.chat_export import chat_directory
+from cptr.utils.runtime import Runtime, FileError
 
 log = logging.getLogger(__name__)
 
@@ -797,7 +797,7 @@ class UpdateChatSettingsRequest(BaseModel):
 
 
 @router.patch("/{chat_id}")
-async def update_chat(chat_id: str, body: UpdateChatRequest, request: Request):
+async def update_chat(request: Request, chat_id: str, body: UpdateChatRequest):
     """Rename a chat."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -831,7 +831,7 @@ async def update_chat(chat_id: str, body: UpdateChatRequest, request: Request):
 
 
 @router.patch("/{chat_id}/settings")
-async def update_chat_settings(chat_id: str, body: UpdateChatSettingsRequest, request: Request):
+async def update_chat_settings(request: Request, chat_id: str, body: UpdateChatSettingsRequest):
     """Save composer settings for one chat."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -846,7 +846,7 @@ async def update_chat_settings(chat_id: str, body: UpdateChatSettingsRequest, re
 
 
 @router.delete("/{chat_id}")
-async def delete_chat(chat_id: str, request: Request):
+async def delete_chat(request: Request, chat_id: str):
     """Delete a chat and all its messages."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -856,11 +856,23 @@ async def delete_chat(chat_id: str, request: Request):
     # Remove the workspace chat file and durable internal children.
     workspace = chat.meta.get("workspace") if chat.meta else None
     chat_file = chat_directory(workspace) / f"{chat_id}.json"
-    await asyncio.to_thread(chat_file.unlink, True)  # missing_ok=True
+    if workspace:
+        try:
+            await Runtime.delete_item(request, str(chat_file))
+        except FileError:
+            pass
+    else:
+        await asyncio.to_thread(chat_file.unlink, True)  # missing_ok=True
     for child in await Chat.get_internal_descendants(chat_id):
         child_workspace = (child.meta or {}).get("workspace")
         child_file = chat_directory(child_workspace) / f"{child.id}.json"
-        await asyncio.to_thread(child_file.unlink, True)
+        if child_workspace:
+            try:
+                await Runtime.delete_item(request, str(child_file))
+            except FileError:
+                pass
+        else:
+            await asyncio.to_thread(child_file.unlink, True)
 
     await Chat.delete(chat_id)
     from cptr.socket.main import emit_to_user
@@ -885,7 +897,7 @@ class ForkChatRequest(BaseModel):
 
 
 @router.post("/{chat_id}/fork")
-async def fork_chat(chat_id: str, request: Request, body: ForkChatRequest | None = None):
+async def fork_chat(request: Request, chat_id: str, body: ForkChatRequest | None = None):
     """Clone a completed chat branch through the selected message."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -974,7 +986,7 @@ class CompactRequest(BaseModel):
 
 
 @router.post("")
-async def send_message(body: SendMessageRequest, request: Request):
+async def send_message(request: Request, body: SendMessageRequest):
     """Send a message. Omit chat_id to create a new chat.
     Returns: { chat_id, message_id, queued? }
     """
@@ -1012,11 +1024,15 @@ async def send_message(body: SendMessageRequest, request: Request):
             meta=meta,
             created_at=now_ms(),
         )
-        chats_dir = chat_directory(workspace)
-        await asyncio.to_thread(lambda: chats_dir.mkdir(parents=True, exist_ok=True))
-
         if workspace:
-            await asyncio.to_thread(ensure_cptr_gitignored, workspace)
+            await Runtime.write_file(
+                request,
+                str(chat_directory(workspace) / f"{chat.id}.json"),
+                "{}",
+            )
+        else:
+            chats_dir = chat_directory(workspace)
+            await asyncio.to_thread(lambda: chats_dir.mkdir(parents=True, exist_ok=True))
 
     from cptr.utils.chat_task import (
         get_pending_input_lock,
@@ -1098,6 +1114,7 @@ async def send_message(body: SendMessageRequest, request: Request):
     await export_chat_to_file(chat.id)
 
     start_task(
+        request,
         message_id=assistant_msg.id,
         chat_id=chat.id,
         user_id=user_id,
@@ -1122,7 +1139,7 @@ async def send_message(body: SendMessageRequest, request: Request):
 
 
 @router.post("/{chat_id}/compact")
-async def compact_chat(chat_id: str, body: CompactRequest, request: Request):
+async def compact_chat(request: Request, chat_id: str, body: CompactRequest):
     """Summarize older active-branch messages and store a compaction checkpoint."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -1251,6 +1268,7 @@ async def resolve_ask_user(
     )
     target = await resolve_model_target(msg.model or "", app.state)
     start_task(
+        None,
         message_id=message_id,
         chat_id=chat_id,
         user_id=chat.user_id,
@@ -1281,7 +1299,7 @@ async def answer_ask_user(
 
 
 @router.post("/{chat_id}/messages/{message_id}/approve")
-async def approve_tool(chat_id: str, message_id: str, body: ApproveRequest, request: Request):
+async def approve_tool(request: Request, chat_id: str, message_id: str, body: ApproveRequest):
     """Execute or reject a pending tool call, then continue."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -1340,6 +1358,7 @@ async def approve_tool(chat_id: str, message_id: str, body: ApproveRequest, requ
     from cptr.utils.chat_task import start_task
 
     start_task(
+        request,
         message_id=message_id,
         chat_id=chat_id,
         user_id=user_id,
@@ -1354,7 +1373,7 @@ async def approve_tool(chat_id: str, message_id: str, body: ApproveRequest, requ
 
 
 @router.post("/{chat_id}/messages/{message_id}/cancel")
-async def cancel_task_endpoint(chat_id: str, message_id: str, request: Request):
+async def cancel_task_endpoint(request: Request, chat_id: str, message_id: str):
     """Cancel running task, preserve partial output."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -1393,7 +1412,7 @@ class UpdateCurrentRequest(BaseModel):
 
 
 @router.post("/{chat_id}/current")
-async def update_current(chat_id: str, body: UpdateCurrentRequest, request: Request):
+async def update_current(request: Request, chat_id: str, body: UpdateCurrentRequest):
     """Set current_message_id (the active branch leaf)."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -1442,7 +1461,7 @@ class CreateMessageRequest(BaseModel):
 
 
 @router.post("/{chat_id}/messages")
-async def create_message_endpoint(chat_id: str, body: CreateMessageRequest, request: Request):
+async def create_message_endpoint(request: Request, chat_id: str, body: CreateMessageRequest):
     """Create a message without starting a task (for Save As Copy)."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -1476,7 +1495,7 @@ def _should_queue_for_parent(parent_msg: ChatMessage | None) -> bool:
 
 
 @router.post("/{chat_id}/queue/{message_id}/send")
-async def queue_send_now(chat_id: str, message_id: str, request: Request):
+async def queue_send_now(request: Request, chat_id: str, message_id: str):
     """Dequeue one message and send it immediately on its stored branch."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
@@ -1529,6 +1548,7 @@ async def queue_send_now(chat_id: str, message_id: str, request: Request):
         await Chat.update_current_message(chat_id, assistant_msg.id, now_ms())
 
     start_task(
+        request,
         message_id=assistant_msg.id,
         chat_id=chat_id,
         user_id=user_id,
@@ -1539,7 +1559,7 @@ async def queue_send_now(chat_id: str, message_id: str, request: Request):
 
 
 @router.delete("/{chat_id}/queue/{message_id}")
-async def queue_delete(chat_id: str, message_id: str, request: Request):
+async def queue_delete(request: Request, chat_id: str, message_id: str):
     """Remove a queued message."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)

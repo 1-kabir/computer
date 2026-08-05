@@ -280,6 +280,7 @@ async def _inject_completion(record: dict[str, Any]) -> None:
     )
 
     start_task(
+        None,
         message_id=assistant_msg.id,
         chat_id=parent_chat_id,
         user_id=user_id,

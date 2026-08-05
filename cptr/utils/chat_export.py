@@ -6,13 +6,14 @@ This function rebuilds the file from DB state.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
 
 from cptr.env import DATA_DIR
 from cptr.models import Chat, ChatMessage
+from cptr.utils.identity import identity_for_user_id
+from cptr.utils.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +74,14 @@ async def export_chat_to_file(chat_id: str) -> None:
         },
     }
 
-    def _write():
-        chats_dir = chat_directory(workspace)
-        chats_dir.mkdir(parents=True, exist_ok=True)
-        target = chats_dir / f"{chat_id}.json"
-        target.write_text(json.dumps(chat_data, indent=2, ensure_ascii=False))
-
     try:
-        await asyncio.to_thread(_write)
+        content = json.dumps(chat_data, indent=2, ensure_ascii=False)
+        target = chat_directory(workspace) / f"{chat_id}.json"
+        if workspace:
+            identity = await identity_for_user_id(chat.user_id)
+            await Runtime.write_file(identity, str(target), content)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
     except Exception:
         logger.exception(f"Failed to export chat {chat_id}")

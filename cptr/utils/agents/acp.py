@@ -21,6 +21,7 @@ class AcpClient:
         client_capabilities: dict[str, Any] | None = None,
         resume_session_id: str | None = None,
         auto_approve_permissions: bool = False,
+        preexec_fn=None,
     ) -> None:
         self.command = command
         self.args = args
@@ -30,6 +31,7 @@ class AcpClient:
         self.client_capabilities = client_capabilities or {}
         self.resume_session_id = resume_session_id
         self.auto_approve_permissions = auto_approve_permissions
+        self.preexec_fn = preexec_fn
         self.proc: asyncio.subprocess.Process | None = None
         self.reader_task: asyncio.Task | None = None
         self.stderr_task: asyncio.Task | None = None
@@ -50,6 +52,7 @@ class AcpClient:
             stderr=asyncio.subprocess.PIPE,
             cwd=self.cwd or os.getcwd(),
             env=self.env,
+            preexec_fn=self.preexec_fn,
         )
         self.reader_task = asyncio.create_task(self._reader_loop())
         self.stderr_task = asyncio.create_task(self._stderr_loop())

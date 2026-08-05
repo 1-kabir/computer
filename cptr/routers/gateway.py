@@ -29,10 +29,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from cptr.models import Chat, ChatMessage, Config
+from cptr.models import Auth, Chat, ChatMessage, Config
 from cptr.models.workspaces import Workspace
 from cptr.utils.agents.prompts import message_text
-from cptr.utils.config import now_ms
+from cptr.utils.config import AuthResult, now_ms
+from cptr.utils.runtime import Runtime, FileError
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,11 @@ async def _authenticate(request: Request) -> str:
             user_id = key.get("user_id")
             if not user_id:
                 raise HTTPException(500, "API key has no user_id")
+            auth_row = await Auth.get_by_user_id(user_id)
+            request.state.auth = AuthResult(
+                user_id=user_id,
+                username=auth_row.username if auth_row else None,
+            )
             return user_id
 
     raise HTTPException(401, "Invalid API key")
@@ -168,7 +174,7 @@ async def create_chat_completion(request: Request, body: ChatCompletionRequest):
     workspace = await _resolve_workspace(user_id, body.model)
 
     # 2. Resolve the selected model target for this workspace.
-    target, model_id = await _resolve_model(workspace, request.app.state)
+    target, model_id = await _resolve_model(request, workspace, request.app.state)
 
     # Intercept OWUI utility tasks (follow-ups, title gen, tags gen).
     # These should go directly to the LLM, not through the agentic loop.
@@ -179,7 +185,7 @@ async def create_chat_completion(request: Request, body: ChatCompletionRequest):
     # 3. Session mapping: find or create a cptr chat
     client_chat_id = request.headers.get(CHAT_ID_HEADER) or request.headers.get(OWUI_CHAT_ID_HEADER)
     chat_id = await _ensure_chat(
-        user_id, workspace, client_chat_id, body.messages, model_id
+        request, user_id, workspace, client_chat_id, body.messages, model_id
     )
 
     # 4. Resolve message tree — map OWUI message IDs to cptr message IDs
@@ -195,13 +201,16 @@ async def create_chat_completion(request: Request, body: ChatCompletionRequest):
 
     # Export JSON so cptr sidebar sees it immediately
     from cptr.utils.chat_export import export_chat_to_file
+
     await export_chat_to_file(chat_id)
 
     # 5. Create output queue and start the agentic loop
     output_queue: asyncio.Queue = asyncio.Queue()
 
     from cptr.utils.chat_task import start_task
+
     start_task(
+        request,
         message_id=assistant_msg.id,
         chat_id=chat_id,
         user_id=user_id,
@@ -232,11 +241,13 @@ async def create_chat_completion(request: Request, body: ChatCompletionRequest):
             "object": "chat.completion",
             "created": created,
             "model": body.model,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": full_text},
-                "finish_reason": "stop",
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": full_text},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
@@ -514,10 +525,8 @@ async def _intercept_task(
     task_header = request.headers.get(OWUI_TASK_HEADER, "").strip()
     if task_header:
         logger.info("[gateway] Detected utility task via header: %s", task_header)
-        utility_target = await _resolve_utility_model(workspace, request.app.state)
-        return await _proxy_to_llm(
-            body, utility_target.connection, utility_target.runtime_model
-        )
+        utility_target = await _resolve_utility_model(request, workspace, request.app.state)
+        return await _proxy_to_llm(body, utility_target.connection, utility_target.runtime_model)
 
     # 2. Message content pattern matching (fallback)
     if not body.messages:
@@ -533,10 +542,8 @@ async def _intercept_task(
         return None
 
     logger.info("[gateway] Detected utility task via content matching")
-    utility_target = await _resolve_utility_model(workspace, request.app.state)
-    return await _proxy_to_llm(
-        body, utility_target.connection, utility_target.runtime_model
-    )
+    utility_target = await _resolve_utility_model(request, workspace, request.app.state)
+    return await _proxy_to_llm(body, utility_target.connection, utility_target.runtime_model)
 
 
 async def _proxy_to_llm(
@@ -572,11 +579,13 @@ async def _proxy_to_llm(
         "object": "chat.completion",
         "created": int(time.time()),
         "model": body.model,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": result or ""},
-            "finish_reason": "stop",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": result or ""},
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -618,7 +627,7 @@ async def _resolve_workspace(user_id: str, model_id: str) -> str:
 # ── Model connection resolution ──────────────────────────────
 
 
-async def _resolve_model(workspace: str, app_state=None):
+async def _resolve_model(request: Request, workspace: str, app_state=None):
     """Find a model target to use for the agentic loop.
 
     Priority:
@@ -643,10 +652,12 @@ async def _resolve_model(workspace: str, app_state=None):
             )
 
     # Check for workspace-specific model override
-    model_file = Path(workspace) / ".cptr" / "model"
     model_override = None
-    if model_file.is_file():
-        model_override = model_file.read_text().strip()
+    try:
+        model = await Runtime.read_file(request, str(Path(workspace) / ".cptr" / "model"))
+        model_override = str(model.get("content") or "").strip()
+    except FileError:
+        model_override = None
 
     if model_override:
         try:
@@ -674,20 +685,26 @@ async def _resolve_model(workspace: str, app_state=None):
     return target, target.full_model_id
 
 
-async def _resolve_utility_model(workspace: str, app_state=None):
+async def _resolve_utility_model(request: Request, workspace: str, app_state=None):
     """Resolve an API model for gateway utility tasks."""
-    from cptr.utils.model_targets import ApiModelTarget, first_api_model_target, resolve_model_target
+    from cptr.utils.model_targets import (
+        ApiModelTarget,
+        first_api_model_target,
+        resolve_model_target,
+    )
 
     candidates: list[str] = []
     gateway_model = await Config.get("gateway.model")
     if isinstance(gateway_model, str) and gateway_model.strip():
         candidates.append(gateway_model.strip())
 
-    model_file = Path(workspace) / ".cptr" / "model"
-    if model_file.is_file():
-        override = model_file.read_text().strip()
+    try:
+        model = await Runtime.read_file(request, str(Path(workspace) / ".cptr" / "model"))
+        override = str(model.get("content") or "").strip()
         if override:
             candidates.append(override)
+    except FileError:
+        pass
 
     default_model = await Config.get("chat.default_model")
     if isinstance(default_model, str) and default_model.strip():
@@ -708,6 +725,7 @@ async def _resolve_utility_model(workspace: str, app_state=None):
 
 
 async def _ensure_chat(
+    request: Request,
     user_id: str,
     workspace: str,
     client_chat_id: str | None,
@@ -757,9 +775,9 @@ async def _ensure_chat(
     )
 
     # Ensure .cptr/chats/ dir exists and create marker file
-    chats_dir = Path(workspace) / ".cptr" / "chats"
-    chats_dir.mkdir(parents=True, exist_ok=True)
-    (chats_dir / f"{chat.id}.json").write_text("{}")
+    await Runtime.write_file(
+        request, str(Path(workspace) / ".cptr" / "chats" / f"{chat.id}.json"), "{}"
+    )
 
     return chat.id
 

@@ -19,6 +19,7 @@ from cptr.utils.agents.events import (
     AgentToolUpdate,
 )
 from cptr.utils.agents.prompts import session_turn_prompt_text
+from cptr.utils.identity import env_for
 
 
 _claude_clients: dict[str, tuple[Any, tuple[Any, ...]]] = {}
@@ -119,6 +120,7 @@ async def run_claude_code_agent(
     chat_params: dict[str, Any],
     resume_state: dict[str, Any] | None,
     attachments: PreparedAgentAttachments,
+    identity=None,
 ) -> AsyncIterator[AgentEvent]:
     try:
         import claude_agent_sdk as sdk
@@ -126,7 +128,7 @@ async def run_claude_code_agent(
         yield AgentError("Claude Code support requires the claude-agent-sdk Python package")
         return
 
-    env = os.environ.copy()
+    env = env_for(identity, workspace) if identity and identity.is_pam else os.environ.copy()
     home = os.path.expanduser(str(profile["home"])) if profile.get("home") else None
     if home:
         env["HOME"] = home
