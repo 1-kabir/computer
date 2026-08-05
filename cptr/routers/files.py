@@ -86,7 +86,7 @@ async def get_upload(file_id_ext: str):
 
 
 @router.delete("/{file_id_ext:path}")
-async def delete_upload(file_id_ext: str, request: Request):
+async def delete_upload(request: Request, file_id_ext: str):
     """Delete an uploaded file. Must be the owner."""
     file_id, _ = os.path.splitext(file_id_ext)
 
