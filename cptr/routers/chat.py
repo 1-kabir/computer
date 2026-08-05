@@ -662,7 +662,7 @@ async def get_chat(
         raise HTTPException(404, "chat not found")
 
     messages = await ChatMessage.get_all_by_chat(chat_id)
-    context_usage = await _get_chat_context_usage(chat, model_id)
+    context_usage = await _get_chat_context_usage(request, chat, model_id)
     from cptr.utils.chat_task import get_active_chat_ids
     from cptr.utils.tools import _normalize_tasks
 
@@ -716,7 +716,9 @@ async def _get_context_leaf_message_id(chat) -> str | None:
     return messages[-1].id if messages else None
 
 
-async def _get_chat_context_usage(chat, model_id: str | None = None) -> dict | None:
+async def _get_chat_context_usage(
+    request: Request, chat, model_id: str | None = None
+) -> dict | None:
     message_id = await _get_context_leaf_message_id(chat)
     if not message_id:
         return None
@@ -734,7 +736,7 @@ async def _get_chat_context_usage(chat, model_id: str | None = None) -> dict | N
     workspace = (chat.meta or {}).get("workspace", "")
     model = model_id or await _infer_chat_model(chat.id)
     compact_token_threshold = await load_compact_token_threshold(model)
-    system = await _load_system_prompt(workspace, model or "", user_id=chat.user_id)
+    system = await _load_system_prompt(request, workspace, model or "", user_id=chat.user_id)
     if existing_summary:
         system += f"\n\n[CONVERSATION SUMMARY]\n{existing_summary}"
 
@@ -963,7 +965,7 @@ async def fork_chat(request: Request, chat_id: str, body: ForkChatRequest | None
 
     from cptr.utils.chat_export import export_chat_to_file
 
-    await export_chat_to_file(fork.id)
+    await export_chat_to_file(request, fork.id)
     return {"ok": True, "chat_id": fork.id}
 
 
@@ -1102,7 +1104,7 @@ async def send_message(request: Request, body: SendMessageRequest):
         )
 
     if queued_msg:
-        await process_pending_chat_inputs(chat.id, user_id, workspace or "")
+        await process_pending_chat_inputs(request, chat.id, user_id, workspace or "")
         return {"chat_id": chat.id, "message_id": queued_msg.id, "queued": True}
 
     if not assistant_msg:
@@ -1111,7 +1113,7 @@ async def send_message(request: Request, body: SendMessageRequest):
     # Export JSON immediately so list_chats discovers it right away
     from cptr.utils.chat_export import export_chat_to_file
 
-    await export_chat_to_file(chat.id)
+    await export_chat_to_file(request, chat.id)
 
     start_task(
         request,
@@ -1156,7 +1158,7 @@ async def compact_chat(request: Request, chat_id: str, body: CompactRequest):
         return {"ok": True, "compacted": False, "reason": "empty", "context_usage": None}
     current_msg = await ChatMessage.get_by_id(message_id)
     if not current_msg or not current_msg.parent_id:
-        usage = await _get_chat_context_usage(chat, model_id)
+        usage = await _get_chat_context_usage(request, chat, model_id)
         return {"ok": True, "compacted": False, "reason": "too_short", "context_usage": usage}
 
     from cptr.utils.model_targets import (
@@ -1176,7 +1178,7 @@ async def compact_chat(request: Request, chat_id: str, body: CompactRequest):
     compacted_messages = messages[:-1]
     keep_zone = messages[-1:]
     if not compacted_messages or not keep_zone:
-        usage = await _get_chat_context_usage(chat, model_id)
+        usage = await _get_chat_context_usage(request, chat, model_id)
         return {"ok": True, "compacted": False, "reason": "too_short", "context_usage": usage}
 
     summary = await summarize_messages(
@@ -1190,8 +1192,8 @@ async def compact_chat(request: Request, chat_id: str, body: CompactRequest):
 
     from cptr.utils.chat_export import export_chat_to_file
 
-    await export_chat_to_file(chat_id)
-    usage = await _get_chat_context_usage(chat, model_id)
+    await export_chat_to_file(request, chat_id)
+    usage = await _get_chat_context_usage(request, chat, model_id)
     return {
         "ok": True,
         "compacted": True,
@@ -1399,7 +1401,7 @@ async def cancel_task_endpoint(request: Request, chat_id: str, message_id: str):
     from cptr.utils.chat_task import process_pending_chat_inputs
 
     workspace = chat.meta.get("workspace", "") if chat.meta else ""
-    await process_pending_chat_inputs(chat_id, user_id, workspace)
+    await process_pending_chat_inputs(request, chat_id, user_id, workspace)
 
     return {"ok": True}
 

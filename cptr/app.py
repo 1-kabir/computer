@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
     # Start messaging bots
     from cptr.utils.bridge import BotManager
 
-    app.state.bot_manager = BotManager()
+    app.state.bot_manager = BotManager(app)
     await app.state.bot_manager.start_all()
 
     try:

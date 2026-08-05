@@ -244,8 +244,9 @@ class BotManager:
     asyncio tasks.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, app=None) -> None:
         global _current_bot_manager
+        self.app = app
         self._adapters: dict[str, BaseAdapter] = {}  # bot_id → adapter
         self._tasks: dict[str, asyncio.Task] = {}  # bot_id → polling task
         self._stream_tasks: dict[str, asyncio.Task] = {}  # key → streaming task
@@ -619,11 +620,11 @@ class BotManager:
         )
 
         marker = Path(bot["workspace"]) / ".cptr" / "chats" / f"{chat.id}.json"
-        from cptr.utils.identity import identity_for_user_id
+        from cptr.utils.identity import internal_request_for_user
         from cptr.utils.runtime import Runtime
 
-        identity = await identity_for_user_id(bot["user_id"])
-        await Runtime.write_file(identity, str(marker), "{}")
+        request = await internal_request_for_user(self.app, bot["user_id"])
+        await Runtime.write_file(request, str(marker), "{}")
 
         return chat.id
 
@@ -806,10 +807,11 @@ class BotManager:
         )
         await Chat.update_current_message(chat_id, assistant_msg.id, now_ms())
 
-        # Export JSON so the web UI can see the chat immediately
         from cptr.utils.chat_export import export_chat_to_file
+        from cptr.utils.identity import internal_request_for_user
 
-        await export_chat_to_file(chat_id)
+        request = await internal_request_for_user(self.app, bot["user_id"])
+        await export_chat_to_file(request, chat_id)
 
         # Send initial "thinking" message for non-draft platforms (Discord)
         # Telegram uses sendMessageDraft which handles this natively
@@ -834,7 +836,7 @@ class BotManager:
 
         # Start the agentic loop
         start_task(
-            None,
+            request,
             message_id=assistant_msg.id,
             chat_id=chat_id,
             user_id=bot["user_id"],

@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from cptr.models import Auth
+from fastapi import Request
+from cptr.models import Auth, User
 from cptr.utils.config import AuthMode, AuthResult, get_auth_mode
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -113,6 +114,35 @@ async def identity_for_context(context: dict) -> ExecutionIdentity:
     if request is not None:
         return await identity_for_request(request)
     return await identity_for_user_id(context.get("user_id"))
+
+
+async def internal_request_for_user(app, user_id: str | None) -> Request:
+    if not user_id:
+        raise IdentityUnavailable("missing user id", status_code=401)
+    user = await User.get_by_id(user_id)
+    if user is None:
+        raise IdentityUnavailable("user not found", status_code=401)
+    auth = await Auth.get_by_user_id(user_id)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/__internal__",
+            "headers": [],
+            "client": ("127.0.0.1", 0),
+            "server": ("internal", 0),
+            "scheme": "http",
+            "app": app,
+            "state": {},
+        }
+    )
+    request.state.auth = AuthResult(
+        user_id=user_id,
+        username=auth.username if auth else None,
+        role=user.role,
+    )
+    request.state.internal = True
+    return request
 
 
 def env_for(

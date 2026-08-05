@@ -270,7 +270,7 @@ async def run_automation_now(
 
     from cptr.utils.automations import execute_automation
 
-    asyncio.create_task(execute_automation(automation, webhook_payload=webhook_payload))
+    asyncio.create_task(execute_automation(request.app, automation, webhook_payload=webhook_payload))
     return _automation_dict(automation)
 
 

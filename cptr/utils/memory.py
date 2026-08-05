@@ -14,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fastapi import Request
 from cptr.env import DATA_DIR
 from cptr.models import Config
-from cptr.utils.identity import identity_for_user_id
-from cptr.utils.runtime import Runtime, FileError
+from cptr.utils.runtime import FileError, Runtime
 from cptr.utils.workspace import ensure_cptr_gitignored
 
 MEMORY_DIR_NAME = "memory"
@@ -1157,13 +1157,13 @@ def apply_memory_batch(
 
 
 async def write_memory(
+    request: Request,
     user_id: str,
     workspace: str,
     scope: str,
     operations: list[dict[str, Any]],
 ) -> dict[str, Any]:
     memory_file = await resolve_memory_file(user_id, workspace, scope)
-    identity = await identity_for_user_id(user_id) if scope == "workspace" else None
     uses_markdown = any(
         isinstance(operation, dict) and _operation_uses_markdown(operation)
         for operation in operations
@@ -1185,9 +1185,9 @@ async def write_memory(
             result = await asyncio.to_thread(apply_markdown_memory_batch, root, operations)
             result.update({"scope": scope, "path": str(root.root)})
             return result
-        if identity:
+        if scope == "workspace":
             try:
-                file_data = await Runtime.read_file(identity, str(memory_file.path))
+                file_data = await Runtime.read_file(request, str(memory_file.path))
                 entries = [
                     line[2:].strip()
                     for line in str(file_data.get("content") or "").splitlines()
@@ -1209,10 +1209,8 @@ async def write_memory(
                 "scope": scope,
                 "path": str(memory_file.path),
             }
-        if identity:
-            await Runtime.write_file(
-                identity, str(memory_file.path), format_memory_entries(next_entries)
-            )
+        if scope == "workspace":
+            await Runtime.write_file(request, str(memory_file.path), format_memory_entries(next_entries))
         else:
             await asyncio.to_thread(write_memory_entries, memory_file.path, next_entries)
         return {
@@ -1226,6 +1224,7 @@ async def write_memory(
 
 
 async def remember(
+    request: Request,
     user_id: str,
     workspace: str,
     scope: str,
@@ -1234,10 +1233,10 @@ async def remember(
     settings = await get_memory_settings()
     if not settings["enabled"]:
         return {"success": False, "error": "memory writes are disabled"}
-    return await write_memory(user_id, workspace, scope, operations)
+    return await write_memory(request, user_id, workspace, scope, operations)
 
 
-async def read_memory_state(user_id: str, workspace: str) -> dict[str, Any]:
+async def read_memory_state(request: Request, user_id: str, workspace: str) -> dict[str, Any]:
     settings = await get_memory_settings()
     user_memory = await resolve_memory_file(user_id, workspace, "user")
     user_entries = await asyncio.to_thread(read_memory_entries, user_memory.path)
@@ -1247,9 +1246,7 @@ async def read_memory_state(user_id: str, workspace: str) -> dict[str, Any]:
     if workspace:
         workspace_memory = await resolve_memory_file(user_id, workspace, "workspace")
         try:
-            file_data = await Runtime.read_file(
-                await identity_for_user_id(user_id), str(workspace_memory.path)
-            )
+            file_data = await Runtime.read_file(request, str(workspace_memory.path))
             workspace_entries = [
                 line[2:].strip()
                 for line in str(file_data.get("content") or "").splitlines()
@@ -1279,6 +1276,7 @@ async def read_memory_state(user_id: str, workspace: str) -> dict[str, Any]:
 
 
 async def recall_memory_context(
+    request: Request,
     *,
     user_id: str,
     workspace: str,
@@ -1298,9 +1296,7 @@ async def recall_memory_context(
     for root in roots:
         if root.scope == "workspace":
             try:
-                file_data = await Runtime.read_file(
-                    await identity_for_user_id(user_id), str(root.baseline_path)
-                )
+                file_data = await Runtime.read_file(request, str(root.baseline_path))
                 baseline_text = str(file_data.get("content") or "")
             except FileError:
                 baseline_text = ""
@@ -1336,6 +1332,7 @@ async def recall_memory_context(
 
 
 async def build_memory_prompt(
+    request: Request,
     user_id: str | None,
     workspace: str,
     *,
@@ -1351,6 +1348,7 @@ async def build_memory_prompt(
     blocks: list[str] = []
 
     context = await recall_memory_context(
+        request,
         user_id=user_id,
         workspace=workspace,
         current_message=current_message,
@@ -1385,9 +1383,7 @@ async def build_memory_prompt(
     for root, title, budget, snippets in render_roots:
         if root.scope == "workspace":
             try:
-                file_data = await Runtime.read_file(
-                    await identity_for_user_id(user_id), str(root.baseline_path)
-                )
+                file_data = await Runtime.read_file(request, str(root.baseline_path))
                 text = str(file_data.get("content") or "").strip()
                 baseline = (
                     _trim_prompt_text(_prompt_safe_text(text, root.baseline_path.name), budget)
@@ -1482,6 +1478,7 @@ async def list_memory_files_state(
 
 
 async def read_memory_file_state(
+    request: Request,
     user_id: str,
     workspace: str,
     *,
@@ -1495,7 +1492,11 @@ async def read_memory_file_state(
     target = _safe_relative_path(root.root, path)
     if not target.is_file() or target.suffix.lower() != ".md":
         raise ValueError("memory file not found")
-    content = await asyncio.to_thread(target.read_text, errors="replace")
+    if scope == "workspace":
+        file_data = await Runtime.read_file(request, str(target))
+        content = str(file_data.get("content") or "")
+    else:
+        content = await asyncio.to_thread(target.read_text, errors="replace")
     sections = _split_markdown_sections(content, target.stem)
     return {
         "scope": scope,
@@ -1512,7 +1513,7 @@ async def read_memory_file_state(
     }
 
 
-async def review_memory_vault(user_id: str, workspace: str) -> dict[str, Any]:
+async def review_memory_vault(request: Request, user_id: str, workspace: str) -> dict[str, Any]:
     """Deterministic vault review for the UI/API; LLM learning still runs after turns."""
     roots = resolve_memory_roots(user_id, workspace)
 
@@ -1602,6 +1603,7 @@ def build_memory_review_prompt(
 
 
 async def review_memory_after_turn(
+    request: Request,
     *,
     user_id: str,
     message_id: str,
@@ -1627,6 +1629,7 @@ async def review_memory_after_turn(
     _reviewed_messages.add(message_id)
     asyncio.create_task(
         run_memory_review(
+            request,
             user_id=user_id,
             workspace=workspace,
             conversation_messages=list(conversation_messages),
@@ -1638,6 +1641,7 @@ async def review_memory_after_turn(
 
 
 async def run_memory_review(
+    request: Request,
     *,
     user_id: str,
     workspace: str,
@@ -1649,7 +1653,7 @@ async def run_memory_review(
     try:
         from cptr.utils.ai import generate_json
 
-        memory_state = await read_memory_state(user_id, workspace)
+        memory_state = await read_memory_state(request, user_id, workspace)
         transcript = summarize_recent_conversation(conversation_messages, assistant_reply)
         prompt = build_memory_review_prompt(memory_state, workspace, transcript)
         parsed = await generate_json(
@@ -1668,6 +1672,7 @@ async def run_memory_review(
             if not isinstance(operations, list) or not operations:
                 continue
             await remember(
+                request,
                 user_id=user_id,
                 workspace=workspace,
                 scope=scope,

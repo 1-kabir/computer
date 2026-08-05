@@ -101,6 +101,7 @@ async def _launch_timer(timer, app) -> None:
     from cptr.utils.chat_export import export_chat_to_file
     from cptr.utils.chat_task import get_pending_input_lock, start_task
     from cptr.utils.config import now_ms
+    from cptr.utils.identity import internal_request_for_user
     from cptr.utils.model_targets import resolve_model_target
 
     async with _manager_lock:
@@ -111,6 +112,7 @@ async def _launch_timer(timer, app) -> None:
         status = meta.get("status") or meta.get("timer_status")
         if status != "pending" or int(meta.get("timer_at") or 0) > time.time_ns():
             return
+        request = await internal_request_for_user(app, timer.user_id)
 
         parent = await Chat.get_by_id(meta.get("parent_chat_id", ""))
         if not parent:
@@ -172,8 +174,8 @@ async def _launch_timer(timer, app) -> None:
             )
             await Chat.update_meta(timer.id, meta, now_ms())
 
-        await export_chat_to_file(timer.id)
-        await export_chat_to_file(parent.id)
+        await export_chat_to_file(request, timer.id)
+        await export_chat_to_file(request, parent.id)
 
         await emit_to_user(
             timer.user_id,
@@ -184,7 +186,7 @@ async def _launch_timer(timer, app) -> None:
             },
         )
         start_task(
-            None,
+            request,
             message_id=assistant_msg.id,
             chat_id=parent.id,
             user_id=timer.user_id,

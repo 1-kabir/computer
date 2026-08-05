@@ -70,7 +70,7 @@ class MemoryReviewRequest(BaseModel):
 @router.get("")
 async def get_memory(request: Request, workspace: str = Query("")):
     user_id = _get_user(request)
-    return await read_memory_state(user_id, workspace)
+    return await read_memory_state(request, user_id, workspace)
 
 
 @router.put("/config")
@@ -83,6 +83,7 @@ async def put_memory_settings(request: Request, body: MemorySettingsRequest):
 async def update_memory(request: Request, body: MemoryUpdateRequest):
     user_id = _get_user(request)
     return await remember(
+        request,
         user_id=user_id,
         workspace=body.workspace,
         scope=body.scope,
@@ -136,6 +137,7 @@ async def get_memory_file(
     user_id = _get_user(request)
     try:
         return await read_memory_file_state(
+            request,
             user_id=user_id,
             workspace=workspace,
             scope=scope,
@@ -148,4 +150,4 @@ async def get_memory_file(
 @router.post("/review")
 async def review_memory(request: Request, body: MemoryReviewRequest):
     user_id = _get_user(request)
-    return await review_memory_vault(user_id, body.workspace)
+    return await review_memory_vault(request, user_id, body.workspace)

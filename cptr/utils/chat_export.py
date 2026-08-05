@@ -10,9 +10,9 @@ import json
 import logging
 from pathlib import Path
 
+from fastapi import Request
 from cptr.env import DATA_DIR
 from cptr.models import Chat, ChatMessage
-from cptr.utils.identity import identity_for_user_id
 from cptr.utils.runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ def chat_directory(workspace: str | None) -> Path:
     return Path(workspace) / ".cptr" / "chats" if workspace else DATA_DIR / "chats"
 
 
-async def export_chat_to_file(chat_id: str) -> None:
+async def export_chat_to_file(request: Request, chat_id: str) -> None:
     """Regenerate .cptr/chats/{id}.json from the DB."""
     chat = await Chat.get_by_id(chat_id)
     if not chat:
@@ -78,8 +78,7 @@ async def export_chat_to_file(chat_id: str) -> None:
         content = json.dumps(chat_data, indent=2, ensure_ascii=False)
         target = chat_directory(workspace) / f"{chat_id}.json"
         if workspace:
-            identity = await identity_for_user_id(chat.user_id)
-            await Runtime.write_file(identity, str(target), content)
+            await Runtime.write_file(request, str(target), content)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")

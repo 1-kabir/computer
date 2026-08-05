@@ -11,6 +11,7 @@ from datetime import date
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
+from fastapi import Request
 from cptr.models import Config
 from cptr.utils.identity import identity_for_user_id
 from cptr.utils.runtime import Runtime, FileError
@@ -270,6 +271,7 @@ def _build_template_variables(
 
 
 async def load_system_prompt(
+    request: Request,
     workspace: str,
     model: str = "",
     user_id: str | None = None,
@@ -291,9 +293,7 @@ async def load_system_prompt(
         ws_prompt = Path(workspace) / ".cptr" / "system.md"
         if user_id:
             try:
-                file_data = await Runtime.read_file(
-                    await identity_for_user_id(user_id), str(ws_prompt)
-                )
+                file_data = await Runtime.read_file(request, str(ws_prompt))
                 if not file_data.get("binary"):
                     template = str(file_data.get("content") or "").strip()
             except FileError:
@@ -328,6 +328,7 @@ async def load_system_prompt(
             from cptr.utils.memory import build_memory_prompt
 
             memory = await build_memory_prompt(
+                request,
                 user_id,
                 workspace,
                 current_message=current_message,

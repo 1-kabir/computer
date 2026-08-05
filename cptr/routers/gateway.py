@@ -202,7 +202,7 @@ async def create_chat_completion(request: Request, body: ChatCompletionRequest):
     # Export JSON so cptr sidebar sees it immediately
     from cptr.utils.chat_export import export_chat_to_file
 
-    await export_chat_to_file(chat_id)
+    await export_chat_to_file(request, chat_id)
 
     # 5. Create output queue and start the agentic loop
     output_queue: asyncio.Queue = asyncio.Queue()

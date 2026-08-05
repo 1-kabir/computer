@@ -13,8 +13,9 @@ import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
+from fastapi import Request
 from cptr.utils.gitignore import is_gitignored, load_gitignore
 from cptr.utils.identity import (
     ExecutionIdentity,
@@ -23,9 +24,6 @@ from cptr.utils.identity import (
     identity_for_request,
     preexec_for,
 )
-
-if TYPE_CHECKING:
-    from fastapi import Request
 
 MAX_FILE_SIZE = 100 * 1024 * 1024
 MATCH_PAGE_SIZE = 100
@@ -132,36 +130,32 @@ class FileError(RuntimeError):
 
 class Runtime:
     @staticmethod
-    async def stat(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
-        return await _file(await _identity(request), _stat, path)
+    async def stat(request: Request, path: str) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _stat, path)
 
     @staticmethod
-    async def list_directory(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
-        return await _file(await _identity(request), _list_directory, path)
+    async def list_directory(request: Request, path: str) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _list_directory, path)
 
     @staticmethod
-    async def list_tree(
-        request: Request | ExecutionIdentity, path: str, recursive: bool = False
-    ) -> dict[str, Any]:
-        return await _file(await _identity(request), _list_tree, path, recursive)
+    async def list_tree(request: Request, path: str, recursive: bool = False) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _list_tree, path, recursive)
 
     @staticmethod
-    async def read_file(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
-        return await _file(await _identity(request), _read_file, path)
+    async def read_file(request: Request, path: str) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _read_file, path)
 
     @staticmethod
-    async def extract_text(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
-        return await _file(await _identity(request), _extract_text, path)
+    async def extract_text(request: Request, path: str) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _extract_text, path)
 
     @staticmethod
-    async def write_file(
-        request: Request | ExecutionIdentity, path: str, content: str | bytes
-    ) -> dict[str, Any]:
-        return await _file(await _identity(request), _write_file, path, content)
+    async def write_file(request: Request, path: str, content: str | bytes) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _write_file, path, content)
 
     @staticmethod
     async def file_matches(
-        request: Request | ExecutionIdentity,
+        request: Request,
         query: str,
         path: str,
         show_hidden: bool = False,
@@ -169,7 +163,7 @@ class Runtime:
         limit: int = MATCH_PAGE_SIZE,
     ) -> dict[str, Any]:
         return await _file(
-            await _identity(request),
+            await _request_identity(request),
             _file_matches,
             path,
             query,
@@ -179,40 +173,34 @@ class Runtime:
         )
 
     @staticmethod
-    async def search_files(
-        request: Request | ExecutionIdentity, query: str, path: str, limit: int = 20
-    ) -> dict[str, Any]:
-        return await _file(await _identity(request), _search_files, path, query, limit)
+    async def search_files(request: Request, query: str, path: str, limit: int = 20) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _search_files, path, query, limit)
 
     @staticmethod
-    async def create_item(
-        request: Request | ExecutionIdentity, path: str, type: str = "file"
-    ) -> dict[str, Any]:
-        return await _file(await _identity(request), _create_item, path, type)
+    async def create_item(request: Request, path: str, type: str = "file") -> dict[str, Any]:
+        return await _file(await _request_identity(request), _create_item, path, type)
 
     @staticmethod
-    async def move_item(
-        request: Request | ExecutionIdentity, source: str, destination: str
-    ) -> dict[str, Any]:
-        return await _file(await _identity(request), _move_item, source, destination)
+    async def move_item(request: Request, source: str, destination: str) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _move_item, source, destination)
 
     @staticmethod
-    async def delete_item(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
-        return await _file(await _identity(request), _delete_item, path)
+    async def delete_item(request: Request, path: str) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _delete_item, path)
 
     @staticmethod
     async def upload_file(
-        request: Request | ExecutionIdentity, directory: str, filename: str, content: bytes
+        request: Request, directory: str, filename: str, content: bytes
     ) -> dict[str, Any]:
-        return await _file(await _identity(request), _upload_file, directory, filename, content)
+        return await _file(await _request_identity(request), _upload_file, directory, filename, content)
 
     @staticmethod
-    async def read_bytes(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
-        return await _file(await _identity(request), _read_bytes, path)
+    async def read_bytes(request: Request, path: str) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _read_bytes, path)
 
     @staticmethod
-    async def stream_file(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
-        identity = await _identity(request)
+    async def stream_file(request: Request, path: str) -> dict[str, Any]:
+        identity = await _request_identity(request)
         file_stat = await _file(identity, _stat, path)
         if file_stat.get("type") != "file":
             raise FileError(f"Not a file: {path}")
@@ -272,15 +260,11 @@ class Runtime:
         }
 
     @staticmethod
-    async def archive_files(
-        request: Request | ExecutionIdentity, paths: list[str]
-    ) -> dict[str, Any]:
-        return await _file(await _identity(request), _archive_files, paths)
+    async def archive_files(request: Request, paths: list[str]) -> dict[str, Any]:
+        return await _file(await _request_identity(request), _archive_files, paths)
 
 
-async def _identity(request: Request | ExecutionIdentity) -> ExecutionIdentity:
-    if isinstance(request, ExecutionIdentity):
-        return request
+async def _request_identity(request: Request) -> ExecutionIdentity:
     try:
         return await identity_for_request(request)
     except IdentityUnavailable as exc:

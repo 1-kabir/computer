@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, Optional, get_args, get_origin, get_type_hints
 
+from fastapi import Request
 from cptr.env import CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS, EXECUTE_TIMEOUT
 from cptr.utils.gitignore import is_gitignored, load_gitignore
 from cptr.utils.identity import (
@@ -584,7 +585,9 @@ async def read_file(
 
     request = __context__.get("request")
     try:
-        file_stat = await Runtime.stat(request or identity, str(full))
+        if request is None:
+            return "Error: request context unavailable"
+        file_stat = await Runtime.stat(request, str(full))
     except FileError:
         return f"Error: file not found: {path}"
 
@@ -598,7 +601,7 @@ async def read_file(
     # Image files: return base64 JSON instead of garbled text
     if full.suffix.lower() in IMAGE_EXTENSIONS:
         try:
-            image = await Runtime.read_bytes(request or identity, str(full))
+            image = await Runtime.read_bytes(request, str(full))
         except FileError as e:
             return f"Error: {e}"
         return await asyncio.to_thread(_read_image_data, image["data"], full.suffix, path)
@@ -608,12 +611,12 @@ async def read_file(
         return f"Error: file too large ({size} bytes, max 500KB)"
 
     try:
-        file_data = await Runtime.read_file(request or identity, str(full))
+        file_data = await Runtime.read_file(request, str(full))
     except FileError as e:
         return f"Error: {e}"
     if file_data.get("binary"):
         try:
-            extracted = await Runtime.extract_text(request or identity, str(full))
+            extracted = await Runtime.extract_text(request, str(full))
         except FileError as e:
             return f"Error: {e}"
         content = str(extracted.get("text") or "")
@@ -658,9 +661,10 @@ async def list_directory(
     workspace = __context__["workspace"]
     request = __context__.get("request")
     try:
-        identity = None if request is not None else await identity_for_context(__context__)
         full = _resolve_path(path, workspace)
-        result = await Runtime.list_tree(request or identity, str(full), recursive)
+        if request is None:
+            return "Error: request context unavailable"
+        result = await Runtime.list_tree(request, str(full), recursive)
     except (ValueError, FileError, IdentityUnavailable) as e:
         return f"Error: {e}"
     res = str(result.get("text") or "")
@@ -688,9 +692,10 @@ async def search_files(
     workspace = __context__["workspace"]
     request = __context__.get("request")
     try:
-        identity = None if request is not None else await identity_for_context(__context__)
         full = _resolve_path(path, workspace)
-        directory = await Runtime.stat(request or identity, str(full))
+        if request is None:
+            return "Error: request context unavailable"
+        directory = await Runtime.stat(request, str(full))
     except (ValueError, FileError, IdentityUnavailable) as e:
         return f"Error: {e}"
     if directory.get("type") != "directory":
@@ -709,9 +714,7 @@ async def search_files(
         )
     except FileNotFoundError:
         try:
-            matches = await Runtime.file_matches(
-                request or identity, query, str(full), False, 0, 50
-            )
+            matches = await Runtime.file_matches(request, query, str(full), False, 0, 50)
         except FileError as e:
             return f"Error: {e}"
         rows = []
@@ -851,12 +854,8 @@ async def create_file(
     """
     workspace = __context__["workspace"]
     request = __context__.get("request")
-    identity = None
     if request is None:
-        try:
-            identity = await identity_for_context(__context__)
-        except IdentityUnavailable as e:
-            return f"Error: {e}"
+        return "Error: request context unavailable"
 
     # Artifact mode: save to .cptr/artifacts/ (same location as create_artifact)
     # When artifact_type is set, path is ignored.
@@ -868,10 +867,9 @@ async def create_file(
         artifact_path = artifact_dir / f"{ts}_{artifact_type}.md"
 
         try:
-            if request is not None:
-                await Runtime.write_file(request, str(artifact_path), content)
-            else:
-                await Runtime.write_file(identity, str(artifact_path), content)
+            if request is None:
+                return "Error: request context unavailable"
+            await Runtime.write_file(request, str(artifact_path), content)
         except FileError as e:
             return f"Error: {e}"
 
@@ -896,10 +894,9 @@ async def create_file(
         return f"Error: file already exists: {path}. Use overwrite=true or edit_file to modify."
 
     try:
-        if request is not None:
-            await Runtime.write_file(request, str(full), content)
-        else:
-            await Runtime.write_file(identity, str(full), content)
+        if request is None:
+            return "Error: request context unavailable"
+        await Runtime.write_file(request, str(full), content)
     except FileError as e:
         return f"Error: {e}"
     return f"Created {path} ({len(content)} bytes, {len(content.splitlines())} lines)"
@@ -921,22 +918,15 @@ async def create_artifact(
 
     workspace = __context__["workspace"]
     request = __context__.get("request")
-    identity = None
     if request is None:
-        try:
-            identity = await identity_for_context(__context__)
-        except IdentityUnavailable as e:
-            return f"Error: {e}"
+        return "Error: request context unavailable"
     artifact_type = artifact_type or "implementation_plan"
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     artifact_dir = Path(workspace) / ".cptr" / "artifacts"
     artifact_path = artifact_dir / f"{ts}_{artifact_type}.md"
 
     try:
-        if request is not None:
-            await Runtime.write_file(request, str(artifact_path), content)
-        else:
-            await Runtime.write_file(identity, str(artifact_path), content)
+        await Runtime.write_file(request, str(artifact_path), content)
     except FileError as e:
         return f"Error: {e}"
 
@@ -1084,21 +1074,16 @@ async def write_file(path: str, content: str, *, __context__: dict) -> str:
     """
     workspace = __context__["workspace"]
     request = __context__.get("request")
-    identity = None
     if request is None:
-        try:
-            identity = await identity_for_context(__context__)
-        except IdentityUnavailable as e:
-            return f"Error: {e}"
+        return "Error: request context unavailable"
     full = _resolve_path(path, workspace)
     if _is_dotenv(full):
         return _DOTENV_ERROR
 
     try:
-        if request is not None:
-            await Runtime.write_file(request, str(full), content)
-        else:
-            await Runtime.write_file(identity, str(full), content)
+        if request is None:
+            return "Error: request context unavailable"
+        await Runtime.write_file(request, str(full), content)
     except FileError as e:
         return f"Error: {e}"
     return f"Wrote {len(content)} bytes to {path}"
@@ -1113,10 +1098,8 @@ async def display_file(path: str, *, __context__: dict) -> str:
         return "Error: path is required."
     workspace = __context__["workspace"]
     request = __context__.get("request")
-    try:
-        identity = None if request is not None else await identity_for_context(__context__)
-    except IdentityUnavailable as e:
-        return f"Error: {e}"
+    if request is None:
+        return "Error: request context unavailable"
 
     try:
         full = _resolve_path(path, workspace)
@@ -1126,7 +1109,7 @@ async def display_file(path: str, *, __context__: dict) -> str:
     if _is_dotenv(full):
         return _DOTENV_ERROR
     try:
-        file_stat = await Runtime.stat(request or identity, str(full))
+        file_stat = await Runtime.stat(request, str(full))
     except FileError:
         return f"Error: file not found: {path}"
     if file_stat.get("type") != "file":
@@ -1171,20 +1154,13 @@ async def edit_file(
     """
     workspace = __context__["workspace"]
     request = __context__.get("request")
-    identity = None
     if request is None:
-        try:
-            identity = await identity_for_context(__context__)
-        except IdentityUnavailable as e:
-            return f"Error: {e}"
+        return "Error: request context unavailable"
     full = _resolve_path(path, workspace)
     if _is_dotenv(full):
         return _DOTENV_ERROR
     try:
-        if request is not None:
-            file_data = await Runtime.read_file(request, str(full))
-        else:
-            file_data = await Runtime.read_file(identity, str(full))
+        file_data = await Runtime.read_file(request, str(full))
     except FileError:
         return f"Error: file not found: {path}"
     if file_data.get("binary"):
@@ -1223,10 +1199,7 @@ async def edit_file(
         new_content = content.replace(target, replacement, 1)
 
     try:
-        if request is not None:
-            await Runtime.write_file(request, str(full), new_content)
-        else:
-            await Runtime.write_file(identity, str(full), new_content)
+        await Runtime.write_file(request, str(full), new_content)
     except FileError as e:
         return f"Error: {e}"
 
@@ -1250,20 +1223,13 @@ async def multi_edit_file(
     """
     workspace = __context__["workspace"]
     request = __context__.get("request")
-    identity = None
     if request is None:
-        try:
-            identity = await identity_for_context(__context__)
-        except IdentityUnavailable as e:
-            return f"Error: {e}"
+        return "Error: request context unavailable"
     full = _resolve_path(path, workspace)
     if _is_dotenv(full):
         return _DOTENV_ERROR
     try:
-        if request is not None:
-            file_data = await Runtime.read_file(request, str(full))
-        else:
-            file_data = await Runtime.read_file(identity, str(full))
+        file_data = await Runtime.read_file(request, str(full))
     except FileError:
         return f"Error: file not found: {path}"
     if file_data.get("binary"):
@@ -1301,10 +1267,7 @@ async def multi_edit_file(
         applied += 1
 
     try:
-        if request is not None:
-            await Runtime.write_file(request, str(full), content)
-        else:
-            await Runtime.write_file(identity, str(full), content)
+        await Runtime.write_file(request, str(full), content)
     except FileError as e:
         return f"Error: {e}"
     return f"Applied {applied} edits to {path}"
@@ -1372,10 +1335,9 @@ async def run_command(
     command_session_id = uuid.uuid4().hex[:8]
     log_path = Path(workspace) / ".cptr" / "task_logs" / f"{command_session_id}.jsonl"
     try:
-        if request is not None:
-            await Runtime.write_file(request, str(log_path), "")
-        else:
-            await Runtime.write_file(identity, str(log_path), "")
+        if request is None:
+            return "Error: request context unavailable"
+        await Runtime.write_file(request, str(log_path), "")
     except FileError as e:
         try:
             _kill_process_group(proc.pid)
@@ -2083,12 +2045,9 @@ async def browser_screenshot(
     filepath = Path(workspace) / ".cptr" / "screenshots" / filename
     request = __context__.get("request")
     try:
-        if request is not None:
-            await Runtime.write_file(request, str(filepath), png_bytes)
-        else:
-            await Runtime.write_file(
-                await identity_for_context(__context__), str(filepath), png_bytes
-            )
+        if request is None:
+            return "Error: request context unavailable"
+        await Runtime.write_file(request, str(filepath), png_bytes)
     except FileError as e:
         return f"Error: {e}"
 
@@ -2137,7 +2096,11 @@ async def image_generate(
     if image_refs:
         from cptr.utils.images import edit_images
 
+        request = __context__.get("request")
+        if request is None:
+            return "Error: request context unavailable"
         results = await edit_images(
+            request,
             prompt,
             image_refs,
             user_id=__context__.get("user_id"),
@@ -2150,7 +2113,11 @@ async def image_generate(
     else:
         from cptr.utils.images import generate_images
 
+        request = __context__.get("request")
+        if request is None:
+            return "Error: request context unavailable"
         results = await generate_images(
+            request,
             prompt,
             user_id=__context__.get("user_id"),
             size=size,
@@ -2195,11 +2162,15 @@ async def update_memory(
         return json.dumps({"success": False, "error": "user_id missing from tool context"})
     if not isinstance(operations, list):
         return json.dumps({"success": False, "error": "operations must be a list"})
+    request = __context__.get("request")
+    if request is None:
+        return json.dumps({"success": False, "error": "request context unavailable"})
     settings = await get_memory_settings()
     if not settings.get("tool_enabled", True):
         return json.dumps({"success": False, "error": "memory tool is disabled"})
 
     result = await remember(
+        request,
         user_id=user_id,
         workspace=workspace,
         scope=scope,
@@ -2558,6 +2529,7 @@ async def delegate_task(
 
         reserve = await reserve_async_subagent(
             config["max_async"],
+            request=__context__["request"],
             task=task,
             context=context,
             workspace=__context__["workspace"],
@@ -2574,6 +2546,7 @@ async def delegate_task(
         delegation_id = reserve["delegation_id"]
         try:
             chat, _, assistant_msg = await _create_subagent_chat(
+                __context__["request"],
                 task=task,
                 context=context,
                 workspace=__context__["workspace"],
@@ -2616,6 +2589,7 @@ async def delegate_task(
 
     if config["max_concurrent"] == -1:
         return await _run_subagent_chat(
+            __context__["request"],
             task=task,
             context=context,
             workspace=__context__["workspace"],
@@ -2631,6 +2605,7 @@ async def delegate_task(
 
     async with _subagent_semaphore:
         return await _run_subagent_chat(
+            __context__["request"],
             task=task,
             context=context,
             workspace=__context__["workspace"],
@@ -2681,6 +2656,7 @@ async def timer(
 
     full_model_id = __context__.get("full_model_id") or __context__["model_id"]
     chat, _, _ = await _create_subagent_chat(
+        __context__["request"],
         task=prompt,
         context="",
         workspace=__context__["workspace"],
@@ -2712,6 +2688,7 @@ async def timer(
 
 
 async def _create_subagent_chat(
+    request: Request,
     task: str,
     context: str,
     workspace: str,
@@ -2772,7 +2749,7 @@ async def _create_subagent_chat(
             created_at=now_ms(),
         )
         await Chat.update_current_message(chat.id, assistant_msg.id, now_ms())
-    await export_chat_to_file(chat.id)
+    await export_chat_to_file(request, chat.id)
     return chat, user_msg, assistant_msg
 
 
@@ -2811,6 +2788,7 @@ async def _run_existing_subagent_chat(
 
 
 async def _run_subagent_chat(
+    request: Request,
     task: str,
     context: str,
     workspace: str,
@@ -2822,6 +2800,7 @@ async def _run_subagent_chat(
 ) -> str:
     """Create a real chat and run the agent loop on it."""
     chat, _, assistant_msg = await _create_subagent_chat(
+        request,
         task=task,
         context=context,
         workspace=workspace,

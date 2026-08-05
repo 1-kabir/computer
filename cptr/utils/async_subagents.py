@@ -247,7 +247,9 @@ async def _inject_completion(record: dict[str, Any]) -> None:
                 )
                 await Chat.update_current_message(parent_chat_id, assistant_msg.id, now_ms())
 
-    await export_chat_to_file(parent_chat_id)
+    request = record["request"]
+    await export_chat_to_file(request, parent_chat_id)
+
     if direct_timer_completion:
         await emit_to_user(
             user_id,
@@ -280,7 +282,7 @@ async def _inject_completion(record: dict[str, Any]) -> None:
     )
 
     start_task(
-        None,
+        request,
         message_id=assistant_msg.id,
         chat_id=parent_chat_id,
         user_id=user_id,

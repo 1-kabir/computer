@@ -118,7 +118,7 @@ async def send_file(request: Request, path: str, *, download: bool = False):
         )
 
     try:
-        result = await Runtime.stream_file(identity, path)
+        result = await Runtime.stream_file(request, path)
     except FileError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     headers = {"Content-Length": str(result["size"])}

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import asyncio
 import hashlib
 import mimetypes
 import os
@@ -11,12 +10,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from fastapi import Request
 import httpx
 
 from cptr.models import Config, File
 from cptr.utils.config import _get_jwt_secret, now_ms
 from cptr.utils.crypto import decrypt_key
-from cptr.utils.identity import identity_for_user_id
 from cptr.utils.runtime import Runtime
 from cptr.utils.storage import get_storage
 
@@ -123,6 +122,7 @@ def _unique_workspace_image_path(workspace: str, source: str, content_type: str)
 
 
 async def _store_image(
+    request: Request,
     data: bytes,
     content_type: str,
     user_id: str | None,
@@ -136,12 +136,7 @@ async def _store_image(
 
     if workspace:
         workspace_path = _unique_workspace_image_path(workspace, source, content_type)
-        if user_id:
-            identity = await identity_for_user_id(user_id)
-            await Runtime.write_file(identity, str(workspace_path), data)
-        else:
-            workspace_path.parent.mkdir(parents=True, exist_ok=True)
-            workspace_path.write_bytes(data)
+        await Runtime.write_file(request, str(workspace_path), data)
 
     filename = workspace_path.name if workspace_path else f"{source}{ext}"
     meta = {
@@ -191,6 +186,7 @@ async def _decode_image_response_item(
 
 
 async def generate_images(
+    request: Request,
     prompt: str,
     *,
     user_id: str | None,
@@ -228,6 +224,7 @@ async def generate_images(
             data, content_type = await _decode_image_response_item(client, item, headers)
             results.append(
                 await _store_image(
+                    request,
                     data,
                     content_type,
                     user_id,
@@ -261,13 +258,16 @@ def _resolve_workspace_image_path(value: str, workspace: str | None) -> Path | N
     return path.resolve()
 
 
-async def _load_image_file(image_ref: str, workspace: str | None = None) -> tuple[str, bytes, str]:
+async def _load_image_file(
+    request: Request, image_ref: str, workspace: str | None = None
+) -> tuple[str, bytes, str]:
     path = _resolve_workspace_image_path(image_ref, workspace)
     if path and path.is_file():
         content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
         if not content_type.lower().startswith("image/"):
             raise ValueError(f"File is not an image: {image_ref}")
-        data = await asyncio.to_thread(path.read_bytes)
+        file_data = await Runtime.read_bytes(request, str(path))
+        data = file_data["data"]
         return path.name, data, content_type
 
     clean_id = clean_file_id(image_ref)
@@ -284,6 +284,7 @@ async def _load_image_file(image_ref: str, workspace: str | None = None) -> tupl
 
 
 async def edit_images(
+    request: Request,
     prompt: str,
     image_ids: list[str],
     *,
@@ -313,7 +314,7 @@ async def edit_images(
     if background:
         payload["background"] = background
 
-    loaded_files = [await _load_image_file(image_id, workspace) for image_id in image_ids]
+    loaded_files = [await _load_image_file(request, image_id, workspace) for image_id in image_ids]
     files = []
     multi = len(loaded_files) > 1
     for filename, data, content_type in loaded_files:
@@ -336,6 +337,7 @@ async def edit_images(
             data, content_type = await _decode_image_response_item(client, item, headers)
             results.append(
                 await _store_image(
+                    request,
                     data,
                     content_type,
                     user_id,
