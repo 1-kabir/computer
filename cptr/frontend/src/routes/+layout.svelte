@@ -482,9 +482,7 @@
 		</div>
 	</div>
 
-	{#if $showSearch}
-		<SearchModal onclose={() => showSearch.set(false)} />
-	{/if}
+	<SearchModal onclose={() => showSearch.set(false)} />
 	{#if showSettings}
 		<SettingsModal onclose={() => (showSettings = false)} />
 	{/if}

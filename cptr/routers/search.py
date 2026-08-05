@@ -50,7 +50,7 @@ async def unified_search(
     chat_task = Chat.search_by_text(user_id, q, chat_limit, workspace=workspace)
 
     async def _search_files() -> list[dict]:
-        if not ws_paths:
+        if not ws_paths or file_limit <= 0:
             return []
 
         all_results: list[dict] = []
