@@ -27,6 +27,7 @@ from cptr.utils.agents.prompts import turn_prompt_text
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_OPENCODE_ACTIVITY = object()
 
 
 def _free_port() -> int:
@@ -350,7 +351,7 @@ async def run_opencode_agent(
                         parsed_model = _parse_model(model)
                         while True:
                             emitted: dict[str, str] = {}
-                            event_queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+                            event_queue: asyncio.Queue[AgentEvent | object | None] = asyncio.Queue()
                             event_task = asyncio.create_task(
                                 _collect_opencode_events(
                                     client, headers, session_id, emitted, event_queue
@@ -374,10 +375,35 @@ async def run_opencode_agent(
                                     resumed = False
                                     continue
 
+                                last_activity = asyncio.get_running_loop().time()
                                 while True:
-                                    item = await event_queue.get()
+                                    try:
+                                        item = await asyncio.wait_for(event_queue.get(), timeout=1)
+                                    except asyncio.TimeoutError:
+                                        with suppress(Exception):
+                                            payload = await asyncio.wait_for(
+                                                _request(
+                                                    client,
+                                                    "GET",
+                                                    ["session/status", "session.status"],
+                                                    headers=headers,
+                                                ),
+                                                timeout=5,
+                                            )
+                                            status = _session_data(payload).get(session_id)
+                                            if not isinstance(status, dict) or status.get("type") == "idle":
+                                                break
+                                        if asyncio.get_running_loop().time() - last_activity >= 600:
+                                            raise RuntimeError(
+                                                "OpenCode stopped sending events for 10 minutes."
+                                            )
+                                        continue
+                                    if item is _OPENCODE_ACTIVITY:
+                                        last_activity = asyncio.get_running_loop().time()
+                                        continue
                                     if item is None:
                                         break
+                                    last_activity = asyncio.get_running_loop().time()
                                     yield item
                             except asyncio.CancelledError:
                                 with suppress(Exception):
@@ -437,7 +463,7 @@ async def _collect_opencode_events(
     headers: dict[str, str],
     session_id: str,
     emitted: dict[str, str],
-    queue: asyncio.Queue[AgentEvent | None],
+    queue: asyncio.Queue[AgentEvent | object | None],
 ) -> None:
     message_roles: dict[str, str] = {}
     try:
@@ -461,6 +487,7 @@ async def _collect_opencode_events(
                             )
                             if props.get("sessionID") != session_id:
                                 continue
+                            await queue.put(_OPENCODE_ACTIVITY)
                             role_update = _role_update_from_event(event)
                             if role_update:
                                 message_roles[role_update[0]] = role_update[1]
