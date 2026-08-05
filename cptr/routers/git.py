@@ -265,7 +265,7 @@ async def git_commit(body: CommitRequest):
 
 
 @router.post("/message")
-async def generate_commit_message(body: CommitMessageRequest, request: Request):
+async def generate_commit_message(request: Request, body: CommitMessageRequest):
     """Generate a commit summary and description from the staged diff."""
     await _require_repo(body.root)
     try:
