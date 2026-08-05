@@ -40,7 +40,7 @@ async def list_users(request: Request):
 
 
 @router.post("/users")
-async def create_user(body: CreateUserRequest, request: Request):
+async def create_user(request: Request, body: CreateUserRequest):
     """Create a new user (admin only)."""
     require_admin(request)
 
@@ -65,7 +65,7 @@ async def create_user(body: CreateUserRequest, request: Request):
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, request: Request):
+async def delete_user(request: Request, user_id: str):
     """Delete a user. Cannot delete yourself."""
     auth = require_admin(request)
     if auth.user_id == user_id:
@@ -75,7 +75,7 @@ async def delete_user(user_id: str, request: Request):
 
 
 @router.put("/users/{user_id}/role")
-async def update_role(user_id: str, body: RoleRequest, request: Request):
+async def update_role(request: Request, user_id: str, body: RoleRequest):
     """Update a user's role."""
     require_admin(request)
     if body.role not in ("admin", "user", "pending"):
@@ -86,7 +86,7 @@ async def update_role(user_id: str, body: RoleRequest, request: Request):
 
 
 @router.put("/users/{user_id}/profile")
-async def update_user_profile(user_id: str, body: UpdateUserProfileRequest, request: Request):
+async def update_user_profile(request: Request, user_id: str, body: UpdateUserProfileRequest):
     """Update a user's display name (admin only)."""
     require_admin(request)
     await User.update_display_name(user_id, body.display_name)
@@ -94,7 +94,7 @@ async def update_user_profile(user_id: str, body: UpdateUserProfileRequest, requ
 
 
 @router.put("/users/{user_id}/password")
-async def reset_user_password(user_id: str, body: ResetPasswordRequest, request: Request):
+async def reset_user_password(request: Request, user_id: str, body: ResetPasswordRequest):
     """Reset a user's password (admin only)."""
     require_admin(request)
     if not body.password or len(body.password.strip()) < 6:
@@ -105,7 +105,7 @@ async def reset_user_password(user_id: str, body: ResetPasswordRequest, request:
 
 
 @router.put("/users/{user_id}/username")
-async def update_username(user_id: str, body: UpdateUsernameRequest, request: Request):
+async def update_username(request: Request, user_id: str, body: UpdateUsernameRequest):
     """Update a user's username (admin only)."""
     require_admin(request)
     if not body.username or not body.username.strip():
@@ -126,7 +126,7 @@ async def get_all_config(request: Request):
 
 
 @router.get("/config/{namespace}")
-async def get_config_namespace(namespace: str, request: Request):
+async def get_config_namespace(request: Request, namespace: str):
     """Get config keys for a namespace (e.g. 'auth' → all 'auth.*' keys)."""
     require_admin(request)
     return {"config": await Config.get_namespace(namespace)}
@@ -149,7 +149,7 @@ def _prepare_config_updates(updates: dict) -> dict:
 
 
 @router.put("/config")
-async def put_config(body: ConfigUpdateRequest, request: Request):
+async def put_config(request: Request, body: ConfigUpdateRequest):
     """Update config keys. Upserts each key."""
     require_admin(request)
     await Config.upsert(_prepare_config_updates(body.config))
@@ -171,7 +171,7 @@ async def get_agents(request: Request):
 
 
 @router.put("/agents")
-async def update_agents(body: AgentsUpdateRequest, request: Request):
+async def update_agents(request: Request, body: AgentsUpdateRequest):
     """Replace configured agent profiles."""
     require_admin(request)
     await save_agent_profiles(body.profiles)
@@ -224,7 +224,7 @@ async def list_connections(request: Request):
 
 
 @router.post("/connections")
-async def create_connection(body: CreateConnectionRequest, request: Request):
+async def create_connection(request: Request, body: CreateConnectionRequest):
     """Add a new AI connection."""
     require_admin(request)
     import uuid as _uuid
@@ -251,7 +251,7 @@ async def create_connection(body: CreateConnectionRequest, request: Request):
 
 
 @router.put("/connections/{conn_id}")
-async def update_connection(conn_id: str, body: UpdateConnectionRequest, request: Request):
+async def update_connection(request: Request, conn_id: str, body: UpdateConnectionRequest):
     """Update an existing connection."""
     require_admin(request)
     connections = await _get_connections()
@@ -293,7 +293,7 @@ async def update_connection(conn_id: str, body: UpdateConnectionRequest, request
 
 
 @router.delete("/connections/{conn_id}")
-async def delete_connection(conn_id: str, request: Request):
+async def delete_connection(request: Request, conn_id: str):
     """Delete a connection."""
     require_admin(request)
     connections = [c for c in await _get_connections() if c["id"] != conn_id]
@@ -303,7 +303,7 @@ async def delete_connection(conn_id: str, request: Request):
 
 
 @router.post("/connections/{conn_id}/verify")
-async def verify_connection(conn_id: str, request: Request):
+async def verify_connection(request: Request, conn_id: str):
     """Test a connection by making a lightweight API call."""
     require_admin(request)
     connections = await _get_connections()
@@ -477,7 +477,7 @@ class UpdateModelConfigRequest(BaseModel):
 
 
 @router.put("/models/{model_id:path}/config")
-async def update_model_config(model_id: str, body: UpdateModelConfigRequest, request: Request):
+async def update_model_config(request: Request, model_id: str, body: UpdateModelConfigRequest):
     """Update config for a specific model (or '*' for global defaults)."""
     require_admin(request)
     all_config = await Config.get(CONFIG_KEY_CHAT_MODELS) or {}
@@ -599,7 +599,7 @@ class CreateToolServerRequest(BaseModel):
 
 
 @router.post("/tools/servers")
-async def create_tool_server(body: CreateToolServerRequest, request: Request):
+async def create_tool_server(request: Request, body: CreateToolServerRequest):
     """Add a new external tool server."""
     require_admin(request)
     import re as _re
@@ -651,7 +651,7 @@ class UpdateToolServerRequest(BaseModel):
 
 
 @router.put("/tools/servers/{server_id}")
-async def update_tool_server(server_id: str, body: UpdateToolServerRequest, request: Request):
+async def update_tool_server(request: Request, server_id: str, body: UpdateToolServerRequest):
     """Update an existing tool server."""
     require_admin(request)
     servers = await _get_tool_servers()
@@ -679,7 +679,7 @@ async def update_tool_server(server_id: str, body: UpdateToolServerRequest, requ
 
 
 @router.delete("/tools/servers/{server_id}")
-async def delete_tool_server(server_id: str, request: Request):
+async def delete_tool_server(request: Request, server_id: str):
     """Delete a tool server."""
     require_admin(request)
     servers = [s for s in await _get_tool_servers() if s["id"] != server_id]
@@ -688,7 +688,7 @@ async def delete_tool_server(server_id: str, request: Request):
 
 
 @router.post("/tools/servers/{server_id}/verify")
-async def verify_tool_server(server_id: str, request: Request):
+async def verify_tool_server(request: Request, server_id: str):
     """Test connectivity to a tool server. Returns discovered tools."""
     require_admin(request)
     servers = await _get_tool_servers()
