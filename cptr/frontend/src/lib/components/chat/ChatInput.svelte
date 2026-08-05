@@ -15,6 +15,7 @@
 		extractMentionedSkills,
 		type SkillMentionAttrs
 	} from './SkillMention';
+	import { createSlashCommandMention } from './SlashCommandMention';
 	import FileSuggestionPopup from './FileSuggestionPopup.svelte';
 	import SkillSuggestionPopup from './SkillSuggestionPopup.svelte';
 	import { searchFiles } from '$lib/apis/files';
@@ -391,8 +392,12 @@
 	let skillRepositionRafId: number | null = null;
 	let cachedSkills: SkillMentionAttrs[] | null = null;
 	let cachedSkillsWorkspace = '';
-	let slashSkillSuggestions = $state<SkillMentionAttrs[]>([]);
-	let slashSkillsRequestId = 0;
+	let activeSlashRange = $state<{ from: number; to: number } | null>(null);
+	type SlashSuggestionItem =
+		| { kind: 'command'; id: string }
+		| { kind: 'skill'; id: string; skill: SkillMentionAttrs };
+	let slashSuggestionItems = $state<SlashSuggestionItem[]>([]);
+	let slashCommandsEl: HTMLDivElement | undefined = $state();
 
 	async function getCachedSkills(): Promise<SkillMentionAttrs[]> {
 		if (!cachedSkills || cachedSkillsWorkspace !== workspace) {
@@ -547,6 +552,73 @@
 		}
 	}
 
+	// ── /command suggestion ─────────────────────────
+	function clearSlashSuggestionState() {
+		activeSlashRange = null;
+		slashSuggestionItems = [];
+	}
+
+	function scrollSelectedSlashCommandIntoView() {
+		const selected = slashCommandsEl?.querySelector('.app-interactive-active');
+		selected?.scrollIntoView({ block: 'nearest' });
+	}
+
+	function normalizeSlashIndex(index: number, length = slashSuggestionItems.length) {
+		if (!length) return 0;
+		return (index + length) % length;
+	}
+
+	function selectSlashIndex(index: number, length = slashSuggestionItems.length) {
+		const nextIndex = normalizeSlashIndex(index, length);
+		selectedSlashCommandIndex = nextIndex;
+		void tick().then(scrollSelectedSlashCommandIntoView);
+		return nextIndex;
+	}
+
+	function createSlashSuggestionRenderer() {
+		let selectedIndex = 0;
+		let currentItems: SlashSuggestionItem[] = [];
+
+		function updateState(props: any) {
+			activeSlashRange = props.range ?? null;
+			currentItems = props.items ?? [];
+			slashSuggestionItems = currentItems;
+			selectedIndex = selectSlashIndex(0);
+		}
+
+		return {
+			onStart: updateState,
+			onUpdate: updateState,
+			onKeyDown({ event }: { event: KeyboardEvent }) {
+				if (!currentItems.length) return false;
+				if (event.key === 'ArrowDown') {
+					event.preventDefault();
+					selectedIndex = normalizeSlashIndex(selectedIndex + 1, currentItems.length);
+					selectSlashIndex(selectedIndex, currentItems.length);
+					return true;
+				}
+				if (event.key === 'ArrowUp') {
+					event.preventDefault();
+					selectedIndex = normalizeSlashIndex(selectedIndex - 1, currentItems.length);
+					selectSlashIndex(selectedIndex, currentItems.length);
+					return true;
+				}
+				if (event.key === 'Enter') {
+					event.preventDefault();
+					selectedIndex = normalizeSlashIndex(selectedIndex, currentItems.length);
+					runSlashSuggestionItem(currentItems[selectedIndex]);
+					return true;
+				}
+				if (event.key === 'Escape') {
+					clearSlashSuggestionState();
+					return true;
+				}
+				return false;
+			},
+			onExit: clearSlashSuggestionState
+		};
+	}
+
 	// ── Editor lifecycle ────────────────────────────
 	onMount(() => {
 		if (!editorEl) return;
@@ -561,6 +633,11 @@
 			render: createSkillSuggestionRenderer
 		});
 
+		const slashCommandMention = createSlashCommandMention({
+			items: fetchSlashSuggestions,
+			render: createSlashSuggestionRenderer
+		});
+
 		editor = new Editor({
 			element: editorEl,
 			extensions: [
@@ -572,7 +649,8 @@
 				Placeholder.configure({ placeholder }),
 				CodeBlockLowlight.configure({ lowlight }),
 				fileMention,
-				skillMention
+				skillMention,
+				slashCommandMention
 			],
 			content: inputText || '',
 			contentType: inputText ? 'markdown' : undefined,
@@ -585,26 +663,6 @@
 				handleKeyDown: (view, event) => {
 					if (event.key === 'Enter' && isMobileInput()) return false;
 
-					if (showSlashCommands) {
-						if (event.key === 'ArrowDown') {
-							event.preventDefault();
-							selectedSlashCommandIndex =
-								(selectedSlashCommandIndex + 1) % Math.max(slashSuggestionIds.length, 1);
-							return true;
-						}
-						if (event.key === 'ArrowUp') {
-							event.preventDefault();
-							selectedSlashCommandIndex =
-								(selectedSlashCommandIndex - 1 + slashSuggestionIds.length) %
-								Math.max(slashSuggestionIds.length, 1);
-							return true;
-						}
-						if (event.key === 'Enter') {
-							event.preventDefault();
-							runSlashSuggestion(slashSuggestionIds[selectedSlashCommandIndex]);
-							return true;
-						}
-					}
 					if (event.key === 'Enter' && !event.shiftKey) {
 						// Don't send while suggestion popup is open — let it confirm selection
 						if (popupComponent || skillPopupComponent) return false;
@@ -971,9 +1029,8 @@
 		}
 	});
 
-	const slashCommandQuery = $derived(inputText.trimStart().toLowerCase());
-	const slashCommandIds = $derived.by(() => {
-		if (!slashCommandQuery.startsWith('/')) return [];
+	function getSlashCommandIds(query: string) {
+		const slashCommandQuery = `/${query}`.toLowerCase();
 		const ids: string[] = [];
 		if (hasChatContent && oncompact && '/compact'.startsWith(slashCommandQuery))
 			ids.push('compact');
@@ -981,24 +1038,37 @@
 		if (hasChatContent && onfork && '/fork'.startsWith(slashCommandQuery)) ids.push('fork');
 		if (hasChatContent && onstatus && '/status'.startsWith(slashCommandQuery)) ids.push('status');
 		if ('/model'.startsWith(slashCommandQuery)) ids.push('model');
-		if (
-			hasChatContent &&
-			onskillslist &&
-			slashCommandQuery !== '/skills:list' &&
-			'/skills:list'.startsWith(slashCommandQuery)
-		)
+		if (hasChatContent && onskillslist && '/skills:list'.startsWith(slashCommandQuery))
 			ids.push('skills:list');
-		if (
-			hasChatContent &&
-			slashCommandQuery !== '/skills:create' &&
-			'/skills:create'.startsWith(slashCommandQuery)
-		)
-			ids.push('skills:create');
+		if (hasChatContent && '/skills:create'.startsWith(slashCommandQuery)) ids.push('skills:create');
 		return ids;
+	}
+
+	async function fetchSlashSuggestions({
+		query
+	}: {
+		query: string;
+	}): Promise<SlashSuggestionItem[]> {
+		if (/\s/.test(query)) return [];
+		const commands = getSlashCommandIds(query).map((id) => ({ kind: 'command' as const, id }));
+		const skills = (await fetchSkillSuggestions({ query })).slice(0, 5).map((skill) => ({
+			kind: 'skill' as const,
+			id: skill.id,
+			skill
+		}));
+		return [...commands, ...skills];
+	}
+
+	const slashCommandIds = $derived.by(() => {
+		return slashSuggestionItems.filter((item) => item.kind === 'command').map((item) => item.id);
+	});
+	const slashSkillSuggestions = $derived.by(() => {
+		return slashSuggestionItems.filter((item) => item.kind === 'skill').map((item) => item.skill);
 	});
 	const slashSuggestionIds = $derived([
-		...slashCommandIds.map((id) => `command:${id}`),
-		...slashSkillSuggestions.map((skill) => `skill:${skill.id}`)
+		...slashSuggestionItems.map((item) =>
+			item.kind === 'command' ? `command:${item.id}` : `skill:${item.id}`
+		)
 	]);
 	const showSlashCommands = $derived(slashSuggestionIds.length > 0);
 	const contextPercent = $derived(Math.max(0, Math.round(contextUsage?.percent ?? 0)));
@@ -1009,25 +1079,12 @@
 		if (selectedSlashCommandIndex >= slashSuggestionIds.length) selectedSlashCommandIndex = 0;
 	});
 
-	$effect(() => {
-		const query = slashCommandQuery;
-		const requestId = ++slashSkillsRequestId;
-		if (!query.startsWith('/') || /\s/.test(query.slice(1))) {
-			slashSkillSuggestions = [];
-			return;
-		}
-		void fetchSkillSuggestions({ query: query.slice(1) }).then((items) => {
-			if (requestId !== slashSkillsRequestId) return;
-			slashSkillSuggestions = items.slice(0, 5);
-		});
-	});
-
 	function selectedSlashCommand(commandId: string) {
 		return slashSuggestionIds[selectedSlashCommandIndex] === `command:${commandId}`;
 	}
 
 	function selectSlashCommand(commandId: string) {
-		selectedSlashCommandIndex = slashSuggestionIds.indexOf(`command:${commandId}`);
+		selectSlashIndex(slashSuggestionIds.indexOf(`command:${commandId}`));
 	}
 
 	function selectedSlashSkill(skillId: string) {
@@ -1035,10 +1092,19 @@
 	}
 
 	function selectSlashSkill(skillId: string) {
-		selectedSlashCommandIndex = slashSuggestionIds.indexOf(`skill:${skillId}`);
+		selectSlashIndex(slashSuggestionIds.indexOf(`skill:${skillId}`));
 	}
 
 	function runSlashSuggestion(suggestionId: string | undefined) {
+		const item = slashSuggestionItems.find((item) =>
+			item.kind === 'command'
+				? `command:${item.id}` === suggestionId
+				: `skill:${item.id}` === suggestionId
+		);
+		if (item) {
+			runSlashSuggestionItem(item);
+			return;
+		}
 		if (suggestionId?.startsWith('skill:')) {
 			const skillId = suggestionId.slice('skill:'.length);
 			const skill = slashSkillSuggestions.find((item) => item.id === skillId);
@@ -1048,15 +1114,24 @@
 		runSlashCommand(suggestionId?.replace(/^command:/, ''));
 	}
 
-	function runSlashSkill(skill: SkillMentionAttrs) {
-		if (!editor || editor.isDestroyed) {
-			inputText = `$${skill.label} `;
+	function runSlashSuggestionItem(item: SlashSuggestionItem | undefined) {
+		if (!item) return;
+		if (item.kind === 'skill') {
+			runSlashSkill(item.skill);
 			return;
 		}
-		editor
-			.chain()
-			.focus()
-			.clearContent()
+		runSlashCommand(item.id);
+	}
+
+	function runSlashSkill(skill: SkillMentionAttrs) {
+		if (!editor || editor.isDestroyed) {
+			inputText = inputText.replace(/(^|\s)\/\S*$/, `$1$${skill.label} `);
+			clearSlashSuggestionState();
+			return;
+		}
+		const chain = editor.chain().focus();
+		if (activeSlashRange) chain.deleteRange(activeSlashRange);
+		chain
 			.insertContent([
 				{
 					type: 'skillMention',
@@ -1070,50 +1145,66 @@
 				{ type: 'text', text: ' ' }
 			])
 			.run();
+		clearSlashSuggestionState();
+	}
+
+	function removeSlashCommandToken() {
+		if (editor && !editor.isDestroyed && activeSlashRange) {
+			editor.chain().focus().deleteRange(activeSlashRange).run();
+		} else {
+			inputText = inputText.replace(/(^|\s)\/\S*$/, '$1');
+		}
+		clearSlashSuggestionState();
 	}
 
 	function runSlashCommand(commandId: string | undefined) {
 		if (commandId === 'compact' && (sending || streaming)) return;
 		if (commandId === 'fork' && (sending || streaming)) return;
 		if (commandId === 'compact' && oncompact) {
-			inputText = '';
+			removeSlashCommandToken();
 			oncompact();
 			return;
 		}
 		if (commandId === 'fork' && onfork) {
-			inputText = '';
+			removeSlashCommandToken();
 			onfork();
 			return;
 		}
 		if (commandId === 'plan' && onplan) {
-			inputText = '';
+			removeSlashCommandToken();
 			onplan();
 			return;
 		}
 		if (commandId === 'status' && onstatus) {
-			inputText = '';
+			removeSlashCommandToken();
 			onstatus();
 			return;
 		}
 		if (commandId === 'model') {
-			inputText = '';
+			removeSlashCommandToken();
 			void modelSelector?.openSelector();
 			return;
 		}
 		if (commandId === 'skills:list' && onskillslist) {
-			inputText = '';
+			removeSlashCommandToken();
 			onskillslist();
 			return;
 		}
 		if (commandId === 'skills:create') {
-			inputText = '/skills:create ';
+			removeSlashCommandToken();
+			inputText = '/skills:create';
+			void tick().then(onsend);
 			return;
 		}
 		onsend();
 	}
 
 	function handleSubmit() {
-		runSlashSuggestion(slashSuggestionIds[0]);
+		if (showSlashCommands) {
+			runSlashSuggestion(slashSuggestionIds[selectedSlashCommandIndex]);
+			return;
+		}
+		onsend();
 	}
 
 	async function focusAfterModelSelectorClose() {
@@ -1179,6 +1270,7 @@
 
 	{#if showSlashCommands}
 		<div
+			bind:this={slashCommandsEl}
 			class="app-theme app-surface absolute left-2 bottom-full mb-1 z-50 w-64 max-h-40 overflow-y-auto rounded-xl border shadow-xl p-0.5"
 		>
 			{#if slashCommandIds.length > 0}
