@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, type Snippet } from 'svelte';
+	import { onMount, tick, type Snippet } from 'svelte';
 	import { tooltip } from '$lib/tooltip';
 	import Icon from './Icon.svelte';
 	import KeyPill from './KeyPill.svelte';
@@ -10,6 +10,7 @@
 		icon?: string;
 		onclick: () => void;
 		active?: boolean;
+		highlighted?: boolean;
 		divider?: boolean;
 		/** Optional image URL shown instead of icon (e.g. avatar). */
 		image?: string;
@@ -53,6 +54,9 @@
 		className?: string;
 		/** Horizontal alignment relative to anchor: 'start' (left) or 'end' (right). */
 		align?: 'start' | 'end';
+		/** Scroll the active or highlighted item into the list viewport after render. */
+		scrollActiveIntoView?: boolean;
+		scrollActiveBlock?: ScrollLogicalPosition;
 	}
 
 	let {
@@ -71,10 +75,13 @@
 		empty,
 		children,
 		className = '',
-		align = 'start'
+		align = 'start',
+		scrollActiveIntoView = false,
+		scrollActiveBlock = 'nearest'
 	}: Props = $props();
 
 	let menuEl: HTMLDivElement | undefined = $state();
+	let listEl: HTMLDivElement | undefined = $state();
 	let pos = $state<{ x: number; top?: number; bottom?: number }>({ x: -9999, top: -9999 });
 	let anchorWidth = $state(0);
 	let menuMaxHeight = $state<number | undefined>();
@@ -271,6 +278,14 @@
 		anchorFrame = requestAnimationFrame(trackAnchor);
 	}
 
+	function scrollMenuItemIntoView() {
+		if (!listEl) return;
+		const target =
+			listEl.querySelector<HTMLElement>('[data-menu-highlighted="true"]') ??
+			listEl.querySelector<HTMLElement>('[data-menu-active="true"]');
+		target?.scrollIntoView({ block: scrollActiveBlock });
+	}
+
 	onMount(() => {
 		let dvhProbe: HTMLDivElement | undefined;
 		let dvhObserver: ResizeObserver | undefined;
@@ -320,6 +335,14 @@
 		maxHeight;
 		if (menuEl) scheduleSettledUpdates();
 	});
+
+	$effect(() => {
+		if (!scrollActiveIntoView || !ready) return;
+		items;
+		void tick().then(() => {
+			scrollMenuItemIntoView();
+		});
+	});
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -359,7 +382,11 @@
 		</div>
 	{/if}
 
-	<div class="flex-1 min-h-0 overflow-y-auto" style={maxHeight ? `max-height: ${maxHeight};` : ''}>
+	<div
+		bind:this={listEl}
+		class="flex-1 min-h-0 overflow-y-auto"
+		style={maxHeight ? `max-height: ${maxHeight};` : ''}
+	>
 		{#if children}
 			{@render children()}
 		{:else if items.length === 0 && empty}
@@ -370,9 +397,12 @@
 					<div class="app-divider h-px mx-1 my-0.5"></div>
 				{:else}
 					<div
-						class="group menu-row flex items-center gap-1 w-full h-6 rounded-xl text-xs transition-colors duration-75 {item.active
+						class="group menu-row flex items-center gap-1 w-full h-6 rounded-xl text-xs transition-colors duration-75 {item.active ||
+						item.highlighted
 							? 'app-interactive-active'
 							: ''}"
+						data-menu-highlighted={item.highlighted ? 'true' : undefined}
+						data-menu-active={item.active ? 'true' : undefined}
 					>
 						<button
 							class="flex items-center gap-2 min-w-0 flex-1 h-full px-2 text-inherit"

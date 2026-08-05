@@ -1116,6 +1116,11 @@
 		runSlashSuggestion(slashSuggestionIds[0]);
 	}
 
+	async function focusAfterModelSelectorClose() {
+		await tick();
+		focus();
+	}
+
 	// Allow sending during streaming (message will be enqueued server-side)
 	const canSend = $derived(!!(inputText.trim() && selectedModel && !sending));
 </script>
@@ -1589,7 +1594,12 @@
 				{/if}
 			</div>
 			<div class="self-end mr-1 flex items-center gap-2">
-				<ModelSelector bind:this={modelSelector} bind:selectedModel onchange={onsettingschange} />
+				<ModelSelector
+					bind:this={modelSelector}
+					bind:selectedModel
+					onchange={onsettingschange}
+					onclose={focusAfterModelSelectorClose}
+				/>
 				<DictateButton
 					ontext={(text) => {
 						inputText += text;

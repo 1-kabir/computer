@@ -11,6 +11,7 @@
 		nullable?: boolean;
 		nullLabel?: string;
 		onchange?: (model: string | null) => void;
+		onclose?: () => void;
 	}
 	let {
 		selectedModel = $bindable(),
@@ -18,13 +19,15 @@
 		align = 'end',
 		nullable = false,
 		nullLabel = 'Current model',
-		onchange
+		onchange,
+		onclose
 	}: Props = $props();
 
 	let btnEl: HTMLButtonElement | undefined = $state();
 	let searchInputEl: HTMLInputElement | undefined = $state();
 	let open = $state(false);
 	let search = $state('');
+	let highlightedIndex = $state(0);
 	let isSmallViewport = $state(false);
 
 	const selectorMaxHeight = $derived(isSmallViewport ? '7.5rem' : '15rem');
@@ -35,32 +38,37 @@
 			: $chatModels
 	);
 
-	const menuItems = $derived([
-		...(nullable
-			? [
-					{
-						label: nullLabel,
-						tooltip: nullLabel,
-						active: selectedModel === null || selectedModel === '',
-						check: true,
-						onclick: () => {
-							selectedModel = null;
-							onchange?.(null);
+	const menuItems = $derived.by(() => {
+		const items = [
+			...(nullable
+				? [
+						{
+							label: nullLabel,
+							tooltip: nullLabel,
+							active: selectedModel === null || selectedModel === '',
+							check: true,
+							onclick: () => {
+								selectedModel = null;
+								onchange?.(null);
+							}
 						}
-					}
-				]
-			: []),
-		...filtered.map((m) => ({
-			label: m.name,
-			tooltip: m.name,
-			active: m.id === selectedModel,
-			check: true,
-			onclick: () => {
-				selectedModel = m.id;
-				onchange?.(m.id);
-			}
-		}))
-	]);
+					]
+				: []),
+			...filtered.map((m) => ({
+				label: m.name,
+				tooltip: m.name,
+				active: m.id === selectedModel,
+				check: true,
+				onclick: () => {
+					selectedModel = m.id;
+					onchange?.(m.id);
+				}
+			}))
+		];
+
+		const highlighted = Math.min(highlightedIndex, Math.max(items.length - 1, 0));
+		return items.map((item, index) => ({ ...item, highlighted: index === highlighted }));
+	});
 
 	function updateViewportSize() {
 		isSmallViewport = (window.visualViewport?.width ?? window.innerWidth) < 640;
@@ -83,19 +91,43 @@
 		searchInputEl?.select();
 	}
 
+	function selectedIndex() {
+		if (nullable && (selectedModel === null || selectedModel === '')) return 0;
+		const index = filtered.findIndex((m) => m.id === selectedModel);
+		return index >= 0 ? index + (nullable ? 1 : 0) : 0;
+	}
+
+	function resetHighlightedIndex() {
+		const total = filtered.length + (nullable ? 1 : 0);
+		highlightedIndex = total > 0 ? Math.min(selectedIndex(), total - 1) : 0;
+	}
+
+	function moveHighlightedIndex(delta: number) {
+		const total = menuItems.length;
+		if (total === 0) return;
+		highlightedIndex = (highlightedIndex + delta + total) % total;
+	}
+
 	export async function openSelector() {
 		if ($chatModels.length === 0 && !nullable) return;
 		open = true;
 		search = '';
+		resetHighlightedIndex();
 		await focusSearchInput();
 	}
 
 	async function toggle() {
 		if (open) {
 			open = false;
+			onclose?.();
 			return;
 		}
 		await openSelector();
+	}
+
+	function closeSelector() {
+		open = false;
+		onclose?.();
 	}
 </script>
 
@@ -132,11 +164,13 @@
 		<DropdownMenu
 			items={menuItems}
 			anchor={btnEl}
-			onclose={() => (open = false)}
+			onclose={closeSelector}
 			{preferAbove}
 			forceAbove={preferAbove}
 			maxHeight={selectorMaxHeight}
 			className="w-52"
+			scrollActiveIntoView
+			scrollActiveBlock="center"
 			{align}
 		>
 			{#snippet header()}
@@ -154,11 +188,27 @@
 					</svg>
 					<input
 						bind:this={searchInputEl}
-						bind:value={search}
+						value={search}
 						placeholder={$t('modelSelector.search')}
 						class="w-full bg-transparent text-[0.6875rem] text-gray-500 dark:text-gray-400 placeholder:text-gray-300 dark:placeholder:text-gray-600 outline-none"
+						oninput={(e) => {
+							search = e.currentTarget.value;
+							resetHighlightedIndex();
+						}}
 						onkeydown={(e) => {
-							if (e.key === 'Escape') open = false;
+							if (e.key === 'Escape') {
+								closeSelector();
+							} else if (e.key === 'ArrowDown') {
+								e.preventDefault();
+								moveHighlightedIndex(1);
+							} else if (e.key === 'ArrowUp') {
+								e.preventDefault();
+								moveHighlightedIndex(-1);
+							} else if (e.key === 'Enter') {
+								e.preventDefault();
+								menuItems[Math.min(highlightedIndex, menuItems.length - 1)]?.onclick();
+								closeSelector();
+							}
 						}}
 					/>
 				</div>
