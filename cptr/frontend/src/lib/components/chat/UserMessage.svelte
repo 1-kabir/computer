@@ -211,7 +211,7 @@
 						onclick={cancelEdit}>{$t('common.cancel')}</button
 					>
 					<button
-						class="px-3 py-1 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-black hover:bg-gray-700 dark:hover:bg-gray-200 transition-colors duration-100"
+						class="px-3 py-1 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-black hover:bg-gray-700 dark:hover:bg-white/90 transition-colors duration-100"
 						onclick={sendEdit}>{$t('chat.send')}</button
 					>
 				</div>

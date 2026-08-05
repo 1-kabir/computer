@@ -507,7 +507,7 @@
 			onclick={onclose}>{$t('directory.cancel')}</button
 		>
 		<button
-			class="text-xs text-white dark:text-black bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors duration-100 shrink-0"
+			class="text-xs text-white dark:text-black bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-white/90 px-3 py-1.5 rounded-lg transition-colors duration-100 shrink-0"
 			onclick={selectCurrent}>{$t('directory.open', { name: currentFolderName })}</button
 		>
 	</div>

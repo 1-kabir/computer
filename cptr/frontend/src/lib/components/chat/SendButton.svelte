@@ -34,7 +34,7 @@
 	<button
 		class="flex items-center justify-center rounded-full p-1 transition
 			{voiceActive
-			? 'bg-gray-900 text-white dark:bg-white dark:text-black'
+			? 'bg-gray-900 text-white hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-white/90'
 			: 'bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-white/90 dark:text-black dark:hover:bg-white'}"
 		onclick={onvoice}
 		aria-label={$t('admin.audio.voiceMode')}
@@ -60,7 +60,7 @@
 {:else}
 	<button
 		class="{canSend
-			? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100'
+			? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-white/90'
 			: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 cursor-default'} transition rounded-full p-1 self-center"
 		onclick={onsend}
 		disabled={!canSend}

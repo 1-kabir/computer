@@ -203,7 +203,7 @@
 			{#if questionIndex < questions.length - 1}
 				<button
 					type="button"
-					class="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition-transform active:scale-[0.98] dark:bg-white dark:text-black"
+					class="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition active:scale-[0.98] hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-white/90"
 					onclick={() => (questionIndex += 1)}
 				>
 					{$t('chat.next')}
@@ -211,7 +211,7 @@
 			{:else if pending}
 				<button
 					type="button"
-					class="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition-transform active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+					class="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition active:scale-[0.98] hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black dark:hover:bg-white/90"
 					disabled={!canSubmit || submitting}
 					onclick={() => submit()}
 				>

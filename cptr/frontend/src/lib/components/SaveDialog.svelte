@@ -230,7 +230,7 @@
 				onclick={onclose}>{$t('saveDialog.cancel')}</button
 			>
 			<button
-				class="text-xs font-medium text-white dark:text-black bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors duration-100 disabled:opacity-30 disabled:pointer-events-none shrink-0"
+				class="text-xs font-medium text-white dark:text-black bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-white/90 px-3 py-1.5 rounded-lg transition-colors duration-100 disabled:opacity-30 disabled:pointer-events-none shrink-0"
 				onclick={doSave}
 				disabled={!fileName.trim()}>{$t('saveDialog.save')}</button
 			>

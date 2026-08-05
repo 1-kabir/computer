@@ -1391,7 +1391,7 @@
 								<button
 									class="w-full h-7 mt-1.5 rounded-lg text-[0.6875rem] font-medium transition-colors duration-75
 										{stagedFiles.length && commitSummary.trim()
-										? 'bg-gray-900 dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-200'
+										? 'bg-gray-900 dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-white/90'
 										: 'bg-gray-100 dark:bg-white/6 text-gray-400 dark:text-gray-600 cursor-default'}"
 									disabled={!commitSummary.trim() || !stagedFiles.length || loading}
 									onclick={doCommit}
@@ -1557,7 +1557,7 @@
 					{$t('git.leaveChanges')}
 				</button>
 				<button
-					class="px-3.5 py-1.5 text-xs bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition-colors rounded-full disabled:opacity-50"
+					class="px-3.5 py-1.5 text-xs bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-white/90 transition-colors rounded-full disabled:opacity-50"
 					onclick={() => performBranchCheckout(pendingCheckoutBranch!, 'bring')}
 					disabled={loading}
 				>
@@ -1595,7 +1595,7 @@
 					{$t('git.leaveChanges')}
 				</button>
 				<button
-					class="px-3.5 py-1.5 text-xs bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition-colors rounded-full disabled:opacity-50"
+					class="px-3.5 py-1.5 text-xs bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-white/90 transition-colors rounded-full disabled:opacity-50"
 					onclick={() => performBranchCreate(pendingCreateBranch!, 'bring')}
 					disabled={loading}
 				>

@@ -162,7 +162,7 @@
 					{$t('automationModal.cancel')}
 				</button>
 				<button
-					class="px-3.5 py-1.5 text-xs bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition-colors rounded-full disabled:opacity-50"
+					class="px-3.5 py-1.5 text-xs bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-white/90 transition-colors rounded-full disabled:opacity-50"
 					type="button"
 					onclick={handleSubmit}
 					disabled={saving || !name.trim() || !prompt.trim() || !modelId || !workspace}

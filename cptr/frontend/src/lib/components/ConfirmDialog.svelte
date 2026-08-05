@@ -65,7 +65,7 @@
 				</button>
 				<button
 					bind:this={confirmButton}
-					class="h-7 rounded-lg bg-gray-900 px-3 text-xs font-medium text-white transition-colors duration-75 hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-200"
+					class="h-7 rounded-lg bg-gray-900 px-3 text-xs font-medium text-white transition-colors duration-75 hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-white/90"
 					type="button"
 					onclick={() => settleConfirm(true)}
 				>
