@@ -146,6 +146,12 @@ class Auth(Base):
             return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_by_user_id(user_id: str) -> Auth | None:
+        async with await get_db() as db:
+            result = await db.execute(select(Auth).where(Auth.user_id == user_id))
+            return result.scalar_one_or_none()
+
+    @staticmethod
     async def username_exists(username: str) -> bool:
         async with await get_db() as db:
             result = await db.execute(select(Auth).where(Auth.username == username))
