@@ -118,13 +118,16 @@ async def send_file(request: Request, path: str, *, download: bool = False):
         )
 
     try:
-        result = await Runtime.read_bytes(identity, path)
+        result = await Runtime.stream_file(identity, path)
     except FileError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    headers = {"Content-Length": str(result["size"])}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{result["name"]}"'
     return StreamingResponse(
-        io.BytesIO(result["data"]),
+        result["body"],
         media_type="application/octet-stream" if download else result.get("media_type") or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{result["name"]}"'} if download else None,
+        headers=headers,
     )
 
 

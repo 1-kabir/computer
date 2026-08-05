@@ -6,6 +6,7 @@ import io
 import json
 import mimetypes
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -208,6 +209,67 @@ class Runtime:
     @staticmethod
     async def read_bytes(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
         return await _file(await _identity(request), _read_bytes, path)
+
+    @staticmethod
+    async def stream_file(request: Request | ExecutionIdentity, path: str) -> dict[str, Any]:
+        identity = await _identity(request)
+        file_stat = await _file(identity, _stat, path)
+        if file_stat.get("type") != "file":
+            raise FileError(f"Not a file: {path}")
+
+        try:
+            preexec = preexec_for(identity)
+        except IdentityUnavailable as exc:
+            raise FileError(str(exc), exc.status_code) from exc
+
+        try:
+            read_fd, write_fd = os.pipe()
+            pid = os.fork()
+        except OSError as exc:
+            raise FileError(str(exc), 500) from exc
+
+        if pid == 0:
+            os.close(read_fd)
+            try:
+                if preexec:
+                    preexec()
+                with os.fdopen(write_fd, "wb", buffering=0) as output:
+                    with open(str(file_stat["path"]), "rb") as source:
+                        shutil.copyfileobj(source, output, length=1024 * 1024)
+                os._exit(0)
+            except Exception:
+                os._exit(1)
+
+        os.close(write_fd)
+
+        async def body():
+            loop = asyncio.get_running_loop()
+            complete = False
+            try:
+                while True:
+                    chunk = await loop.run_in_executor(None, os.read, read_fd, 1024 * 1024)
+                    if not chunk:
+                        complete = True
+                        break
+                    yield chunk
+            finally:
+                try:
+                    os.close(read_fd)
+                except OSError:
+                    pass
+                try:
+                    if not complete:
+                        os.kill(pid, signal.SIGTERM)
+                    os.waitpid(pid, 0)
+                except (ChildProcessError, ProcessLookupError):
+                    pass
+
+        return {
+            "name": file_stat["name"],
+            "media_type": file_stat["media_type"],
+            "size": file_stat["size"],
+            "body": body(),
+        }
 
     @staticmethod
     async def archive_files(
