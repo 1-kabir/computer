@@ -24,8 +24,7 @@
 	const language = $derived(languageForPath(path));
 
 	function blockClass(type: DiffLine['type']): string {
-		if (type === 'added')
-			return 'bg-green-100 border-l-[0.1875rem] border-l-green-500 dark:bg-green-500/15 dark:border-l-green-400';
+		if (type === 'added') return 'bg-green-100 diff-gutter-added dark:bg-green-500/15';
 		if (type === 'removed') return 'bg-red-100 diff-gutter-removed dark:bg-red-500/15';
 		return '';
 	}
@@ -172,15 +171,24 @@
 {/if}
 
 <style>
+	.diff-gutter-added {
+		box-shadow: inset 0.1875rem 0 0 #22c55e;
+	}
+
+	:global(.dark) .diff-gutter-added {
+		box-shadow: inset 0.1875rem 0 0 #4ade80;
+	}
+
 	.diff-gutter-removed {
-		border-left: 0.1875rem solid transparent;
-		border-image: repeating-linear-gradient(
-				-45deg,
-				#ef4444 0,
-				#ef4444 1px,
-				transparent 1px,
-				transparent 0.1875rem
-			)
-			3;
+		background-image: repeating-linear-gradient(
+			-45deg,
+			#ef4444 0,
+			#ef4444 1px,
+			transparent 1px,
+			transparent 0.1875rem
+		);
+		background-position: left top;
+		background-repeat: repeat-y;
+		background-size: 0.1875rem 0.1875rem;
 	}
 </style>
