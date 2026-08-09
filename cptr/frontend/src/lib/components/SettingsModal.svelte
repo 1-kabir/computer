@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
+	import { get } from 'svelte/store';
 	import Icon from './Icon.svelte';
 	import Modal from './Modal.svelte';
 	import General from './Settings/General.svelte';
@@ -16,7 +17,7 @@
 	import Models from './Admin/Models.svelte';
 	import Chat from './Admin/Chat.svelte';
 	import Tools from './Admin/Tools.svelte';
-	import Git from './Admin/Git.svelte';
+	import Git from './Settings/Git.svelte';
 	import Skills from './Admin/Skills.svelte';
 	import Messaging from './Admin/Messaging.svelte';
 	import Gateway from './Admin/Gateway.svelte';
@@ -57,15 +58,53 @@
 
 	interface Props {
 		onclose: () => void;
-		initialTab?: Tab;
+		initialTab?: string;
+		gitSettingsAvailable?: boolean;
 	}
 
-	let { onclose, initialTab = 'general' }: Props = $props();
+	let { onclose, initialTab = 'general', gitSettingsAvailable = false }: Props = $props();
 
-	let activeTab = $state<Tab>(untrack(() => (initialTab === 'pwa' ? 'general' : initialTab)));
+	function normalizeTab(tab: string): Tab {
+		const validTabs: Tab[] = [
+			'general',
+			'notifications',
+			'appearance',
+			'usage',
+			'memory',
+			'pwa',
+			'keyboard',
+			'account',
+			'users',
+			'connections',
+			'agents',
+			'models',
+			'chat',
+			'tools',
+			'git',
+			'skills',
+			'messaging',
+			'gateway',
+			'audio',
+			'images',
+			'web',
+			'toolservers',
+			'subagents',
+			'workspace'
+		];
+		return validTabs.includes(tab as Tab) ? (tab as Tab) : 'general';
+	}
+
+	let activeTab = $state<Tab>(
+		untrack(() =>
+			initialTab === 'pwa' || (initialTab === 'git' && !gitSettingsAvailable)
+				? 'general'
+				: normalizeTab(initialTab)
+		)
+	);
 	let showPwaSettings = $state(false);
 
 	const isAdmin = $derived($session?.role === 'admin');
+	const tr = (key: string) => (get(t) as (key: string) => string)(key);
 
 	type SettingsTab = { id: Tab; label: string; icon: string };
 
@@ -76,7 +115,6 @@
 		'models',
 		'chat',
 		'tools',
-		'git',
 		'messaging',
 		'gateway',
 		'audio',
@@ -91,45 +129,51 @@
 
 	const personalTabs: SettingsTab[] = $derived.by(() => {
 		const tabs: SettingsTab[] = [
-			{ id: 'general', label: $t('settings.general'), icon: 'settings' },
-			{ id: 'appearance', label: $t('settings.appearance'), icon: 'sun-light' },
+			{ id: 'general', label: tr('settings.general'), icon: 'settings' },
+			{ id: 'appearance', label: tr('settings.appearance'), icon: 'sun-light' },
 			{ id: 'usage', label: 'Usage', icon: 'usage' },
-			{ id: 'notifications', label: $t('general.notifications'), icon: 'chat-bubble' },
-			{ id: 'keyboard', label: $t('settings.keyboard'), icon: 'terminal' },
-			{ id: 'account', label: $t('settings.account'), icon: 'user' }
+			{ id: 'notifications', label: tr('general.notifications'), icon: 'chat-bubble' },
+			{ id: 'keyboard', label: tr('settings.keyboard'), icon: 'terminal' },
+			{ id: 'account', label: tr('settings.account'), icon: 'user' }
 		];
+		if (gitSettingsAvailable)
+			tabs.splice(tabs.length - 1, 0, { id: 'git', label: tr('admin.git'), icon: 'git-branch' });
 		if (showPwaSettings) tabs.push({ id: 'pwa', label: 'PWA', icon: 'phone' });
 		return tabs;
 	});
 
 	const adminTabs: { id: Tab; label: string; icon: string }[] = $derived([
-		{ id: 'users', label: $t('admin.users'), icon: 'user' },
-		{ id: 'connections', label: $t('admin.connections'), icon: 'plug' },
-		{ id: 'agents', label: $t('admin.agents'), icon: 'terminal' },
-		{ id: 'models', label: $t('admin.models'), icon: 'cube' },
-		{ id: 'chat', label: $t('admin.chat'), icon: 'chat-bubble' },
-		{ id: 'tools', label: $t('admin.tools'), icon: 'tools' },
-		{ id: 'git', label: $t('admin.git'), icon: 'git-branch' },
-		{ id: 'messaging', label: $t('admin.messaging'), icon: 'chat-bubble' },
-		{ id: 'gateway', label: $t('admin.gateway.tab'), icon: 'gateway' },
-		{ id: 'audio', label: $t('admin.audio.title'), icon: 'microphone' },
-		{ id: 'images', label: $t('admin.images.title'), icon: 'image' },
-		{ id: 'web', label: $t('admin.web'), icon: 'globe' },
-		{ id: 'toolservers', label: $t('admin.toolServers'), icon: 'plug' },
-		{ id: 'subagents', label: $t('admin.subagents'), icon: 'user' },
-		{ id: 'workspace', label: $t('admin.workspace'), icon: 'folder' },
-		{ id: 'memory', label: $t('settings.memory'), icon: 'brain' },
-		{ id: 'skills', label: $t('chat.skills'), icon: 'spark' }
+		{ id: 'users', label: tr('admin.users'), icon: 'user' },
+		{ id: 'connections', label: tr('admin.connections'), icon: 'plug' },
+		{ id: 'agents', label: tr('admin.agents'), icon: 'terminal' },
+		{ id: 'models', label: tr('admin.models'), icon: 'cube' },
+		{ id: 'chat', label: tr('admin.chat'), icon: 'chat-bubble' },
+		{ id: 'tools', label: tr('admin.tools'), icon: 'tools' },
+		{ id: 'messaging', label: tr('admin.messaging'), icon: 'chat-bubble' },
+		{ id: 'gateway', label: tr('admin.gateway.tab'), icon: 'gateway' },
+		{ id: 'audio', label: tr('admin.audio.title'), icon: 'microphone' },
+		{ id: 'images', label: tr('admin.images.title'), icon: 'image' },
+		{ id: 'web', label: tr('admin.web'), icon: 'globe' },
+		{ id: 'toolservers', label: tr('admin.toolServers'), icon: 'plug' },
+		{ id: 'subagents', label: tr('admin.subagents'), icon: 'user' },
+		{ id: 'workspace', label: tr('admin.workspace'), icon: 'folder' },
+		{ id: 'memory', label: tr('settings.memory'), icon: 'brain' },
+		{ id: 'skills', label: tr('chat.skills'), icon: 'spark' }
 	]);
 
 	onMount(() => {
 		showPwaSettings = isInstalledPwa();
 		if (showPwaSettings && initialTab === 'pwa') {
 			activeTab = 'pwa';
-		} else if (!$session || ($session.role !== 'admin' && adminTabIds.includes(initialTab))) {
+		} else if (
+			!$session ||
+			($session.role !== 'admin' && adminTabIds.includes(normalizeTab(initialTab)))
+		) {
+			activeTab = 'general';
+		} else if (initialTab === 'git' && !gitSettingsAvailable) {
 			activeTab = 'general';
 		} else if (initialTab !== 'pwa') {
-			activeTab = initialTab;
+			activeTab = normalizeTab(initialTab);
 		} else {
 			activeTab = 'general';
 		}
@@ -158,7 +202,7 @@
 				onclick={onclose}
 			>
 				<Icon name="chevron-left" size={12} />
-				<span>{$t('settings.back')}</span>
+				<span>{tr('settings.back')}</span>
 			</button>
 
 			<!-- Personal -->
@@ -179,7 +223,7 @@
 			{#if isAdmin}
 				<span
 					class="hidden md:block text-[0.625rem] text-gray-400 dark:text-gray-600 px-2 mt-2 mb-0.5"
-					>{$t('sidebar.admin')}</span
+					>{tr('sidebar.admin')}</span
 				>
 
 				{#each adminTabs as tab}

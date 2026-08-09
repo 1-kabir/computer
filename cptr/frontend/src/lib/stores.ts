@@ -131,6 +131,12 @@ export interface UserPreferences {
 	expandToolDetails?: boolean;
 	homeGroup?: EditorGroup;
 	homeState?: HomeState;
+	git?: {
+		identity?: {
+			name?: string;
+			email?: string;
+		};
+	};
 }
 
 // ── ID generation ───────────────────────────────────────────────

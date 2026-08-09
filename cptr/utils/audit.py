@@ -21,7 +21,18 @@ class AuditLevel(str, Enum):
     REQUEST_RESPONSE = "REQUEST_RESPONSE"
 
 
-_SENSITIVE_KEYS = {"password", "api_key", "token", "authorization", "cookie", "secret"}
+_SENSITIVE_KEYS = {
+    "password",
+    "api_key",
+    "token",
+    "authorization",
+    "cookie",
+    "secret",
+    "device_code",
+    "user_code",
+    "verification_uri",
+    "verification_uri_complete",
+}
 
 
 def _redact(value: Any) -> Any:

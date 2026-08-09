@@ -11,23 +11,39 @@ import os
 import sys
 from typing import Any
 
+from cptr.utils.identity import ExecutionIdentity, env_for, preexec_for
+
 
 async def _run(
     *args: str,
     cwd: str,
     check: bool = True,
+    identity: ExecutionIdentity | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Run a git command and return (returncode, stdout, stderr)."""
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        "-c",
-        "core.quotePath=false",
-        *args,
-        cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"},
+    env_extra = {"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", **(extra_env or {})}
+    env = (
+        env_for(identity, cwd, env_extra)
+        if identity and identity.is_pam
+        else {**os.environ, **env_extra}
     )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "-c",
+            "core.quotePath=false",
+            *args,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            preexec_fn=preexec_for(identity) if identity and identity.is_pam else None,
+        )
+    except FileNotFoundError as exc:
+        if exc.filename != "git":
+            raise
+        raise GitError("Git is not installed", 127) from exc
     stdout_bytes, stderr_bytes = await proc.communicate()
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
@@ -44,25 +60,44 @@ class GitError(Exception):
         self.returncode = returncode
 
 
-async def is_repo(root: str) -> bool:
+async def is_repo(root: str, identity: ExecutionIdentity | None = None) -> bool:
     """Check if directory is inside a git repo."""
-    code, _, _ = await _run(
-        "rev-parse",
-        "--is-inside-work-tree",
-        cwd=root,
-        check=False,
-    )
+    try:
+        code, _, _ = await _run(
+            "rev-parse",
+            "--is-inside-work-tree",
+            cwd=root,
+            check=False,
+            identity=identity,
+        )
+    except GitError:
+        return False
     return code == 0
 
 
-async def status(root: str) -> dict[str, Any]:
+async def version(root: str, identity: ExecutionIdentity | None = None) -> str | None:
+    """Return the installed git version, if git is available."""
+    cwd = root if os.path.isdir(root) else "/"
+    try:
+        code, out, _ = await _run("--version", cwd=cwd, check=False, identity=identity)
+    except GitError:
+        return None
+    return out.strip() if code == 0 else None
+
+
+async def status(root: str, identity: ExecutionIdentity | None = None) -> dict[str, Any]:
     """Get repo status using porcelain v2 format."""
     # Refresh Git's cached file metadata first so status catches edits whose
     # filesystem stat information was stale.
-    await _run("update-index", "-q", "--refresh", cwd=root, check=False)
+    await _run("update-index", "-q", "--refresh", cwd=root, check=False, identity=identity)
 
     _, out, _ = await _run(
-        "status", "--porcelain=v2", "--branch", "--untracked-files=all", cwd=root
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "--untracked-files=all",
+        cwd=root,
+        identity=identity,
     )
 
     branch = ""
@@ -98,7 +133,9 @@ async def status(root: str) -> dict[str, Any]:
         entry["status"] = status_text
 
     async def add_numstat(*args: str) -> None:
-        code, numstat, _ = await _run("diff", "--numstat", *args, cwd=root, check=False)
+        code, numstat, _ = await _run(
+            "diff", "--numstat", *args, cwd=root, check=False, identity=identity
+        )
         if code != 0:
             return
         for line in numstat.splitlines():
@@ -168,7 +205,9 @@ async def status(root: str) -> dict[str, Any]:
     await add_numstat("--staged")
 
     # Get remote URL for "View on GitHub/GitLab" link
-    code, remote_out, _ = await _run("remote", "get-url", "origin", cwd=root, check=False)
+    code, remote_out, _ = await _run(
+        "remote", "get-url", "origin", cwd=root, check=False, identity=identity
+    )
     remote_url = remote_out.strip() if code == 0 else ""
 
     return {
@@ -206,12 +245,61 @@ def _count_text_lines(path: str) -> int | None:
     return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
 
 
+async def _config_value(
+    root: str,
+    scope: str,
+    key: str,
+    identity: ExecutionIdentity | None = None,
+) -> str:
+    code, out, _ = await _run(
+        "config", scope, "--get", key, cwd=root, check=False, identity=identity
+    )
+    return out.strip() if code == 0 else ""
+
+
+async def _config_values(
+    root: str,
+    key: str,
+    identity: ExecutionIdentity | None = None,
+) -> list[str]:
+    code, out, _ = await _run(
+        "config", "--get-all", key, cwd=root, check=False, identity=identity
+    )
+    if code != 0:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+async def effective_config(
+    root: str, identity: ExecutionIdentity | None = None
+) -> dict[str, Any]:
+    """Return the Git config fields the settings UI needs."""
+    local_name = await _config_value(root, "--local", "user.name", identity)
+    global_name = await _config_value(root, "--global", "user.name", identity)
+    local_email = await _config_value(root, "--local", "user.email", identity)
+    global_email = await _config_value(root, "--global", "user.email", identity)
+    code, remote_out, _ = await _run(
+        "remote", "get-url", "origin", cwd=root, check=False, identity=identity
+    )
+    return {
+        "identity": {
+            "name": local_name or global_name,
+            "name_source": "local" if local_name else "global" if global_name else "",
+            "email": local_email or global_email,
+            "email_source": "local" if local_email else "global" if global_email else "",
+        },
+        "credential_helpers": await _config_values(root, "credential.helper", identity),
+        "remote_url": remote_out.strip() if code == 0 else "",
+    }
+
+
 async def diff(
     root: str,
     file: str | None = None,
     staged: bool = False,
     untracked: bool = False,
     ignore_whitespace: bool = False,
+    identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """Get diff output as structured data."""
     if untracked and file:
@@ -221,7 +309,7 @@ async def diff(
         if ignore_whitespace:
             args.append("--ignore-all-space")
         args.extend(["--", null_device, file])
-        _, out, _ = await _run(*args, cwd=root, check=False)
+        _, out, _ = await _run(*args, cwd=root, check=False, identity=identity)
         return _parse_diff(out)
 
     args = ["diff", "--unified=3"]
@@ -232,13 +320,15 @@ async def diff(
     if file:
         args.extend(["--", file])
 
-    _, out, _ = await _run(*args, cwd=root)
+    _, out, _ = await _run(*args, cwd=root, identity=identity)
     return _parse_diff(out)
 
 
-async def staged_diff(root: str, max_chars: int = 30000) -> str:
+async def staged_diff(
+    root: str, max_chars: int = 30000, identity: ExecutionIdentity | None = None
+) -> str:
     """Return the staged patch, capped for lightweight AI requests."""
-    _, out, _ = await _run("diff", "--staged", "--unified=3", cwd=root)
+    _, out, _ = await _run("diff", "--staged", "--unified=3", cwd=root, identity=identity)
     return out[:max_chars]
 
 
@@ -282,21 +372,27 @@ def _parse_diff(raw: str) -> dict[str, Any]:
     return {"files": files}
 
 
-async def stage(root: str, files: list[str]) -> None:
+async def stage(
+    root: str, files: list[str], identity: ExecutionIdentity | None = None
+) -> None:
     """Stage files for commit."""
     if not files:
         return
-    await _run("add", "--", *files, cwd=root)
+    await _run("add", "--", *files, cwd=root, identity=identity)
 
 
-async def unstage(root: str, files: list[str]) -> None:
+async def unstage(
+    root: str, files: list[str], identity: ExecutionIdentity | None = None
+) -> None:
     """Unstage files."""
     if not files:
         return
-    await _run("restore", "--staged", "--", *files, cwd=root)
+    await _run("restore", "--staged", "--", *files, cwd=root, identity=identity)
 
 
-async def discard(root: str, files: list[str]) -> None:
+async def discard(
+    root: str, files: list[str], identity: ExecutionIdentity | None = None
+) -> None:
     """Fully discard all changes for files — both staged and unstaged.
 
     Tracked modified/deleted files are unstaged then restored via checkout.
@@ -314,6 +410,7 @@ async def discard(root: str, files: list[str]) -> None:
         "--untracked-files=all",
         cwd=root,
         check=False,
+        identity=identity,
     )
 
     to_unstage: list[str] = []  # staged changes that need unstaging first
@@ -351,11 +448,11 @@ async def discard(root: str, files: list[str]) -> None:
 
     # 1. Unstage any staged changes (reverts index to HEAD)
     if to_unstage:
-        await _run("restore", "--staged", "--", *to_unstage, cwd=root)
+        await _run("restore", "--staged", "--", *to_unstage, cwd=root, identity=identity)
 
     # 2. Restore working-tree files from HEAD
     if to_checkout:
-        await _run("checkout", "--", *to_checkout, cwd=root)
+        await _run("checkout", "--", *to_checkout, cwd=root, identity=identity)
 
     # 3. Remove untracked / newly-added files
     for f in to_delete:
@@ -364,9 +461,14 @@ async def discard(root: str, files: list[str]) -> None:
             os.remove(full)
 
 
-async def commit(root: str, message: str) -> dict[str, str]:
+async def commit(
+    root: str,
+    message: str,
+    identity: ExecutionIdentity | None = None,
+    author_env: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Create a commit. Returns hash and message."""
-    _, out, _ = await _run("commit", "-m", message, cwd=root)
+    _, out, _ = await _run("commit", "-m", message, cwd=root, identity=identity, extra_env=author_env)
     # Parse "main abc1234] message"
     hash_short = ""
     for line in out.splitlines():
@@ -383,6 +485,7 @@ async def log(
     root: str,
     limit: int = 50,
     offset: int = 0,
+    identity: ExecutionIdentity | None = None,
 ) -> list[dict[str, Any]]:
     """Get commit log."""
     fmt = "%H%x00%h%x00%an%x00%aI%x00%s"
@@ -394,6 +497,7 @@ async def log(
         "--no-merges",
         cwd=root,
         check=False,
+        identity=identity,
     )
 
     commits = []
@@ -412,13 +516,18 @@ async def log(
     return commits
 
 
-async def show(root: str, ref: str, ignore_whitespace: bool = False) -> dict[str, Any]:
+async def show(
+    root: str,
+    ref: str,
+    ignore_whitespace: bool = False,
+    identity: ExecutionIdentity | None = None,
+) -> dict[str, Any]:
     """Show a commit's diff."""
     fmt = "%H%x00%h%x00%an%x00%aI%x00%s"
     args = ["show", ref, f"--format={fmt}", "--patch"]
     if ignore_whitespace:
         args.append("--ignore-all-space")
-    _, out, _ = await _run(*args, cwd=root)
+    _, out, _ = await _run(*args, cwd=root, identity=identity)
 
     # First line is the formatted header, rest is diff
     lines = out.split("\n", 1)
@@ -439,7 +548,7 @@ async def show(root: str, ref: str, ignore_whitespace: bool = False) -> dict[str
     return info
 
 
-async def branches(root: str) -> dict[str, Any]:
+async def branches(root: str, identity: ExecutionIdentity | None = None) -> dict[str, Any]:
     """List branches."""
     # Local branches
     _, local_out, _ = await _run(
@@ -447,6 +556,7 @@ async def branches(root: str) -> dict[str, Any]:
         "--format=%(refname:short)\t%(HEAD)",
         cwd=root,
         check=False,
+        identity=identity,
     )
     # Remote branches
     _, remote_out, _ = await _run(
@@ -455,6 +565,7 @@ async def branches(root: str) -> dict[str, Any]:
         "--format=%(refname:short)",
         cwd=root,
         check=False,
+        identity=identity,
     )
 
     current = ""
@@ -550,11 +661,13 @@ def _parse_worktree_list(raw: str, current_root: str = "") -> list[dict[str, Any
     return worktrees
 
 
-async def worktrees(root: str) -> dict[str, Any]:
+async def worktrees(root: str, identity: ExecutionIdentity | None = None) -> dict[str, Any]:
     """List worktrees for the current repository."""
-    _, repo_root_out, _ = await _run("rev-parse", "--show-toplevel", cwd=root)
+    _, repo_root_out, _ = await _run(
+        "rev-parse", "--show-toplevel", cwd=root, identity=identity
+    )
     repo_root = repo_root_out.strip() or root
-    _, out, _ = await _run("worktree", "list", "--porcelain", cwd=root)
+    _, out, _ = await _run("worktree", "list", "--porcelain", cwd=root, identity=identity)
     items = _parse_worktree_list(out, repo_root)
 
     relpath = os.path.relpath(os.path.abspath(root), os.path.abspath(repo_root))
@@ -578,51 +691,57 @@ async def create_worktree(
     root: str,
     branch: str,
     path: str | None = None,
+    identity: ExecutionIdentity | None = None,
 ) -> dict[str, str]:
     """Create a new branch-backed worktree beside the current repository."""
-    _, repo_root_out, _ = await _run("rev-parse", "--show-toplevel", cwd=root)
+    _, repo_root_out, _ = await _run(
+        "rev-parse", "--show-toplevel", cwd=root, identity=identity
+    )
     repo_root = repo_root_out.strip() or root
     target_path = path or _worktree_path_for_branch(repo_root, branch)
-    await _run("worktree", "add", "-b", branch, target_path, cwd=root)
+    await _run("worktree", "add", "-b", branch, target_path, cwd=root, identity=identity)
     return {"path": target_path}
 
 
-async def checkout(root: str, branch: str) -> None:
+async def checkout(root: str, branch: str, identity: ExecutionIdentity | None = None) -> None:
     """Switch branch."""
-    await _run("checkout", branch, cwd=root)
+    await _run("checkout", branch, cwd=root, identity=identity)
 
 
 async def create_branch(
     root: str,
     name: str,
     from_ref: str | None = None,
+    identity: ExecutionIdentity | None = None,
 ) -> None:
     """Create and switch to a new branch."""
     args = ["checkout", "-b", name]
     if from_ref:
         args.append(from_ref)
-    await _run(*args, cwd=root)
+    await _run(*args, cwd=root, identity=identity)
 
 
-async def delete_branch(root: str, name: str) -> None:
+async def delete_branch(root: str, name: str, identity: ExecutionIdentity | None = None) -> None:
     """Delete a local branch."""
-    await _run("branch", "-d", name, cwd=root)
+    await _run("branch", "-d", name, cwd=root, identity=identity)
 
 
-async def rename_branch(root: str, old_name: str, new_name: str) -> None:
+async def rename_branch(
+    root: str, old_name: str, new_name: str, identity: ExecutionIdentity | None = None
+) -> None:
     """Rename a local branch."""
-    await _run("branch", "-m", old_name, new_name, cwd=root)
+    await _run("branch", "-m", old_name, new_name, cwd=root, identity=identity)
 
 
-async def pull(root: str) -> dict[str, Any]:
+async def pull(root: str, identity: ExecutionIdentity | None = None) -> dict[str, Any]:
     """Pull from remote."""
-    code, out, err = await _run("pull", cwd=root, check=False)
+    code, out, err = await _run("pull", cwd=root, check=False, identity=identity)
     return {"ok": code == 0, "message": (out + err).strip()}
 
 
-async def fetch(root: str) -> dict[str, Any]:
+async def fetch(root: str, identity: ExecutionIdentity | None = None) -> dict[str, Any]:
     """Fetch remote refs without merging."""
-    code, out, err = await _run("fetch", "--prune", cwd=root, check=False)
+    code, out, err = await _run("fetch", "--prune", cwd=root, check=False, identity=identity)
     return {"ok": code == 0, "message": (out + err).strip()}
 
 
@@ -632,6 +751,7 @@ async def push(
     set_upstream: bool = False,
     branch: str | None = None,
     remote: str = "origin",
+    identity: ExecutionIdentity | None = None,
 ) -> dict[str, Any]:
     """Push to remote. Use *set_upstream* for first-time branch publish."""
     args = ["push"]
@@ -639,36 +759,42 @@ async def push(
         args.extend(["-u", remote, branch or "HEAD"])
     if force:
         args.append("--force-with-lease")
-    code, out, err = await _run(*args, cwd=root, check=False)
+    code, out, err = await _run(*args, cwd=root, check=False, identity=identity)
     return {"ok": code == 0, "message": (out + err).strip()}
 
 
-async def uncommit(root: str) -> dict[str, str]:
+async def uncommit(root: str, identity: ExecutionIdentity | None = None) -> dict[str, str]:
     """Undo the last commit, moving its changes back to the staging area.
 
     Uses ``git reset --soft HEAD~1``, or ``git update-ref -d HEAD`` for root
     commits (no parent).
     """
     # Grab info about the commit we're about to undo
-    _, log_out, _ = await _run("log", "-1", "--format=%H%x00%h%x00%s", cwd=root, check=False)
+    _, log_out, _ = await _run(
+        "log", "-1", "--format=%H%x00%h%x00%s", cwd=root, check=False, identity=identity
+    )
     parts = log_out.strip().split("\x00")
     undone_hash = parts[1] if len(parts) >= 2 else ""
     undone_msg = parts[2] if len(parts) >= 3 else ""
 
     # Check if HEAD~1 exists (root commits have no parent)
-    code, _, _ = await _run("rev-parse", "--verify", "HEAD~1", cwd=root, check=False)
+    code, _, _ = await _run(
+        "rev-parse", "--verify", "HEAD~1", cwd=root, check=False, identity=identity
+    )
     if code != 0:
         # Root commit: remove HEAD ref, keeps index (staged files) intact
-        await _run("update-ref", "-d", "HEAD", cwd=root)
+        await _run("update-ref", "-d", "HEAD", cwd=root, identity=identity)
     else:
-        await _run("reset", "--soft", "HEAD~1", cwd=root)
+        await _run("reset", "--soft", "HEAD~1", cwd=root, identity=identity)
 
     return {"hash": undone_hash, "message": undone_msg}
 
 
-async def stash_list(root: str) -> list[dict[str, str]]:
+async def stash_list(root: str, identity: ExecutionIdentity | None = None) -> list[dict[str, str]]:
     """List stashes."""
-    _, out, _ = await _run("stash", "list", "--format=%gd%x00%s", cwd=root, check=False)
+    _, out, _ = await _run(
+        "stash", "list", "--format=%gd%x00%s", cwd=root, check=False, identity=identity
+    )
     stashes = []
     for line in out.strip().splitlines():
         parts = line.split("\x00", 1)
@@ -677,16 +803,22 @@ async def stash_list(root: str) -> list[dict[str, str]]:
     return stashes
 
 
-async def stash_save(root: str, message: str | None = None) -> dict[str, Any]:
+async def stash_save(
+    root: str, message: str | None = None, identity: ExecutionIdentity | None = None
+) -> dict[str, Any]:
     """Stash changes."""
     args = ["stash", "push", "--include-untracked"]
     if message:
         args.extend(["-m", message])
-    code, out, err = await _run(*args, cwd=root, check=False)
+    code, out, err = await _run(*args, cwd=root, check=False, identity=identity)
     return {"ok": code == 0, "message": (out + err).strip()}
 
 
-async def stash_pop(root: str, index: int = 0) -> dict[str, Any]:
+async def stash_pop(
+    root: str, index: int = 0, identity: ExecutionIdentity | None = None
+) -> dict[str, Any]:
     """Pop a stash."""
-    code, out, err = await _run("stash", "pop", f"stash@{{{index}}}", cwd=root, check=False)
+    code, out, err = await _run(
+        "stash", "pop", f"stash@{{{index}}}", cwd=root, check=False, identity=identity
+    )
     return {"ok": code == 0, "message": (out + err).strip()}

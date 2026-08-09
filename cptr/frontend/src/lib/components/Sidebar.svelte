@@ -9,6 +9,11 @@
 	import SystemInfoModal from './SystemInfoModal.svelte';
 	import { t } from '$lib/i18n';
 
+	interface Props {
+		gitSettingsAvailable?: boolean;
+	}
+
+	let { gitSettingsAvailable = false }: Props = $props();
 	let showPicker = $state(false);
 	let showSettings = $state(false);
 	let showSystemInfo = $state(false);
@@ -90,6 +95,7 @@
 
 {#if showSettings}
 	<SettingsModal
+		{gitSettingsAvailable}
 		initialTab={settingsTab}
 		onclose={() => {
 			showSettings = false;

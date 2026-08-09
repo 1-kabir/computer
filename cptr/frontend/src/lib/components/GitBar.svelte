@@ -361,21 +361,26 @@
 	async function doCommit() {
 		if (!commitSummary.trim() || !stagedFiles.length) return;
 		loading = true;
-		await stageFiles(
-			workspacePath,
-			stagedFiles.map((f) => f.path)
-		);
-		const msg = commitDescription.trim()
-			? `${commitSummary.trim()}\n\n${commitDescription.trim()}`
-			: commitSummary.trim();
-		await gitCommit(workspacePath, msg);
-		commitSummary = '';
-		commitDescription = '';
-		flash($t('git.committed'));
-		selectedFile = null;
-		fileDiff = [];
-		loading = false;
-		await refresh();
+		try {
+			await stageFiles(
+				workspacePath,
+				stagedFiles.map((f) => f.path)
+			);
+			const msg = commitDescription.trim()
+				? `${commitSummary.trim()}\n\n${commitDescription.trim()}`
+				: commitSummary.trim();
+			await gitCommit(workspacePath, msg);
+			commitSummary = '';
+			commitDescription = '';
+			flash($t('git.committed'));
+			selectedFile = null;
+			fileDiff = [];
+		} catch (e) {
+			flash(e instanceof Error ? e.message : 'Commit failed');
+		} finally {
+			loading = false;
+			await refresh();
+		}
 	}
 
 	async function generateCommitMessage() {
@@ -407,10 +412,15 @@
 
 	async function doPull() {
 		loading = true;
-		const d = await gitPull(workspacePath);
-		flash(d.ok ? $t('git.pulled') : d.message);
-		loading = false;
-		await refresh({ force: true });
+		try {
+			const d = await gitPull(workspacePath);
+			flash(d.ok ? $t('git.pulled') : d.message);
+		} catch (e) {
+			flash(e instanceof Error ? e.message : 'Pull failed');
+		} finally {
+			loading = false;
+			await refresh({ force: true });
+		}
 	}
 
 	async function doFetch() {
@@ -431,13 +441,18 @@
 
 	async function doPush() {
 		loading = true;
-		const d = await gitPush(workspacePath, {
-			set_upstream: needsPublish,
-			branch: needsPublish ? gitStatus?.branch : undefined
-		});
-		flash(d.ok ? $t('git.pushed') : d.message);
-		loading = false;
-		await refresh({ force: true });
+		try {
+			const d = await gitPush(workspacePath, {
+				set_upstream: needsPublish,
+				branch: needsPublish ? gitStatus?.branch : undefined
+			});
+			flash(d.ok ? $t('git.pushed') : d.message);
+		} catch (e) {
+			flash(e instanceof Error ? e.message : 'Push failed');
+		} finally {
+			loading = false;
+			await refresh({ force: true });
+		}
 	}
 
 	async function switchBranch(branch: string) {
