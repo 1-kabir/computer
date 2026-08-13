@@ -324,6 +324,22 @@ async def diff(
     return _parse_diff(out)
 
 
+async def compare_diff(
+    root: str,
+    base: str,
+    head: str,
+    ignore_whitespace: bool = False,
+    identity: ExecutionIdentity | None = None,
+) -> dict[str, Any]:
+    """Get a structured diff for a base...head comparison."""
+    args = ["diff", "--unified=3", "--color=never"]
+    if ignore_whitespace:
+        args.append("--ignore-all-space")
+    args.append(f"{base}...{head}")
+    _, out, _ = await _run(*args, cwd=root, identity=identity)
+    return _parse_diff(out)
+
+
 async def staged_diff(
     root: str, max_chars: int = 30000, identity: ExecutionIdentity | None = None
 ) -> str:

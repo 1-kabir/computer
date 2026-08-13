@@ -309,12 +309,11 @@ export function executeAction(
 			}
 			const g = get(activeGroup);
 			if (!g || g.tabs.length < 2) return true;
-			const visibleTabs = g.tabs.filter((t) => t.type !== 'git');
-			const currentIdx = visibleTabs.findIndex((t) => t.id === g.activeTabId);
+			const currentIdx = g.tabs.findIndex((t) => t.id === g.activeTabId);
 			if (currentIdx === -1) return true;
 			const dir = action === 'nextTab' ? 1 : -1;
-			const nextIdx = (currentIdx + dir + visibleTabs.length) % visibleTabs.length;
-			setActiveTab(visibleTabs[nextIdx].id, g.id);
+			const nextIdx = (currentIdx + dir + g.tabs.length) % g.tabs.length;
+			setActiveTab(g.tabs[nextIdx].id, g.id);
 			return true;
 		}
 

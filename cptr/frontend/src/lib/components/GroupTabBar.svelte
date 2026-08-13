@@ -93,7 +93,7 @@
 
 	type TabDragPayload = { tabId: string; groupId: string };
 
-	const displayTabs = $derived((group?.tabs ?? []).filter((t) => t.type !== 'git'));
+	const displayTabs = $derived(group?.tabs ?? []);
 
 	const isActiveGroup = $derived(home ? homeActive : $activeWorkspace?.activeGroupId === group?.id);
 
@@ -107,8 +107,6 @@
 				return 'terminal';
 			case 'file':
 				return 'page';
-			case 'git':
-				return 'git-diff';
 			case 'chat':
 				return 'chat-bubble';
 			case 'preview':

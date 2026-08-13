@@ -56,6 +56,7 @@ async def run_gh(
         raise GhError("GitHub CLI is not installed")
     work_dir = cwd or identity.home
     env = env_for(identity, work_dir) if identity.is_pam else os.environ.copy()
+    env["GH_PROMPT_DISABLED"] = "1"
     proc = await asyncio.create_subprocess_exec(
         gh,
         *args,

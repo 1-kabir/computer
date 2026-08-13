@@ -54,6 +54,7 @@
 
 	let { children } = $props();
 	let showSettings = $state(false);
+	let settingsTab = $state('general');
 	let showUpdateToast = $state(false);
 	let showSetup = $state(false);
 	let gitSettingsAvailable = $state(false);
@@ -115,6 +116,12 @@
 		}
 		window.addEventListener('offline', showOfflineToast);
 		window.addEventListener('online', showOnlineToast);
+		const openSettings = (event: Event) => {
+			const detail = (event as CustomEvent<{ tab?: string }>).detail;
+			settingsTab = detail?.tab || 'general';
+			showSettings = true;
+		};
+		window.addEventListener('cptr:open-settings', openSettings as EventListener);
 
 		return () => {
 			clearInterval(healthCheck);
@@ -124,6 +131,7 @@
 			vv?.removeEventListener('scroll', syncKeyboardInset);
 			window.removeEventListener('offline', showOfflineToast);
 			window.removeEventListener('online', showOnlineToast);
+			window.removeEventListener('cptr:open-settings', openSettings as EventListener);
 		};
 	});
 
@@ -354,6 +362,7 @@
 				showSearch.update((v) => !v);
 			},
 			toggleSettings: () => {
+				settingsTab = 'general';
 				showSettings = !showSettings;
 			},
 			toggleSearch: () => {
@@ -398,7 +407,7 @@
 		if (!ws) {
 			gitStatusStore.clear();
 			isGitRepo.set(false);
-			gitReviewOpen.set(false);
+			gitReviewOpen.set(null);
 			return;
 		}
 		gitStatusStore.setRoot(ws.path);
@@ -474,7 +483,7 @@
 		class="app-theme h-screen max-h-[100dvh] flex overflow-hidden font-sans antialiased text-gray-900 bg-white dark:text-gray-100 dark:bg-black"
 		style="background: var(--app-bg); color: var(--app-fg);"
 	>
-		<Sidebar gitSettingsAvailable={gitSettingsAvailable} />
+		<Sidebar {gitSettingsAvailable} />
 
 		<div
 			id="main-col"
@@ -497,7 +506,14 @@
 
 	<SearchModal onclose={() => showSearch.set(false)} />
 	{#if showSettings}
-		<SettingsModal {gitSettingsAvailable} onclose={() => (showSettings = false)} />
+		<SettingsModal
+			{gitSettingsAvailable}
+			initialTab={settingsTab}
+			onclose={() => {
+				showSettings = false;
+				settingsTab = 'general';
+			}}
+		/>
 	{/if}
 	<ChangelogModal />
 	{#if $updateAvailable && showUpdateToast}

@@ -6,10 +6,11 @@ All endpoints require a `root` path (the workspace directory).
 
 from __future__ import annotations
 
-from typing import List, Optional
+import json
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from cptr.models import UserStates
 from cptr.utils.ai import generate_text
@@ -23,9 +24,11 @@ from cptr.utils import gh
 from cptr.utils.json_parser import extract_json
 from cptr.utils.git import (
     GitError,
+    _parse_diff,
     branches,
     checkout,
     commit,
+    compare_diff,
     create_branch,
     create_worktree,
     delete_branch,
@@ -165,7 +168,12 @@ async def git_config(request: Request, root: str | None = None):
             "root": root,
             "git": git_data,
             "app_identity": await _user_git_identity(identity),
-            "gh": {"installed": False, "version": None, "hosts": {}, "message": "Git is not installed."},
+            "gh": {
+                "installed": False,
+                "version": None,
+                "hosts": {},
+                "message": "Git is not installed.",
+            },
             "permissions": {
                 "can_manage_gh": identity.is_pam or _is_admin(request),
                 "can_manage_commit_model": _is_admin(request),
@@ -227,6 +235,27 @@ async def git_show(request: Request, root: str, ref: str, ignore_whitespace: boo
     await _require_repo(root, identity)
     try:
         return await show(root, ref, ignore_whitespace, identity)
+    except GitError as e:
+        _handle_git_error(e)
+
+
+@router.get("/compare/diff")
+async def git_compare_diff(
+    request: Request,
+    root: str,
+    base: str,
+    head: str,
+    ignore_whitespace: bool = False,
+):
+    """Show a base...head comparison with its diff."""
+    root, identity = await _root_identity(request, root)
+    await _require_repo(root, identity)
+    base = base.strip()
+    head = head.strip()
+    if not base or not head:
+        raise HTTPException(status_code=400, detail="base and head are required")
+    try:
+        return await compare_diff(root, base, head, ignore_whitespace, identity)
     except GitError as e:
         _handle_git_error(e)
 
@@ -368,6 +397,194 @@ class GhHostRequest(BaseModel):
 
 class GhUserHostRequest(GhHostRequest):
     user: Optional[str] = None
+
+
+class PrNumberRequest(BaseModel):
+    root: str
+    number: int
+
+
+class PrCreateRequest(BaseModel):
+    root: str
+    title: str
+    body: str = ""
+    repo: Optional[str] = None
+    base: Optional[str] = None
+    head: Optional[str] = None
+    draft: bool = False
+    reviewers: List[str] = Field(default_factory=list)
+    assignees: List[str] = Field(default_factory=list)
+    labels: List[str] = Field(default_factory=list)
+    milestone: Optional[str] = None
+    project: Optional[str] = None
+    maintainer_edit: bool = True
+
+
+class PrCommentRequest(PrNumberRequest):
+    body: str
+
+
+class PrReviewRequest(PrNumberRequest):
+    event: str
+    body: str = ""
+
+
+class PrEditRequest(PrNumberRequest):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    base: Optional[str] = None
+    add_reviewers: List[str] = Field(default_factory=list)
+    remove_reviewers: List[str] = Field(default_factory=list)
+    add_assignees: List[str] = Field(default_factory=list)
+    remove_assignees: List[str] = Field(default_factory=list)
+    add_labels: List[str] = Field(default_factory=list)
+    remove_labels: List[str] = Field(default_factory=list)
+    milestone: Optional[str] = None
+    remove_milestone: bool = False
+
+
+class PrReadyRequest(PrNumberRequest):
+    draft: bool = False
+
+
+class PrCloseRequest(PrNumberRequest):
+    comment: str = ""
+    delete_branch: bool = False
+
+
+class PrUpdateBranchRequest(PrNumberRequest):
+    rebase: bool = False
+
+
+class PrMergeRequest(PrNumberRequest):
+    strategy: str = "squash"
+    auto: bool = False
+    delete_branch: bool = False
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
+PR_JSON_FIELDS = ",".join(
+    [
+        "number",
+        "title",
+        "url",
+        "state",
+        "isDraft",
+        "reviewDecision",
+        "statusCheckRollup",
+        "headRefName",
+        "baseRefName",
+        "author",
+        "assignees",
+        "labels",
+        "milestone",
+        "reviewRequests",
+        "latestReviews",
+        "mergeable",
+        "mergeStateStatus",
+        "maintainerCanModify",
+        "createdAt",
+        "updatedAt",
+        "additions",
+        "deletions",
+        "changedFiles",
+    ]
+)
+
+PR_DETAIL_JSON_FIELDS = PR_JSON_FIELDS + ",body,comments,reviews,commits,files"
+
+PR_CHECK_FIELDS = "bucket,completedAt,description,event,link,name,startedAt,state,workflow"
+
+
+def _remote_is_github(url: str) -> bool:
+    return "github.com" in url.lower()
+
+
+def _gh_has_login(auth: dict[str, Any]) -> bool:
+    for accounts in (auth.get("hosts") or {}).values():
+        if isinstance(accounts, list) and accounts:
+            return True
+        if isinstance(accounts, dict):
+            users = accounts.get("users")
+            if isinstance(users, list) and users:
+                return True
+            if accounts:
+                return True
+    return False
+
+
+async def _pr_json(
+    root: str,
+    identity: ExecutionIdentity,
+    args: list[str],
+    *,
+    check: bool = True,
+) -> Any:
+    code, out, err = await gh.run_gh(args, identity=identity, cwd=root, check=False)
+    if code != 0:
+        if check:
+            raise gh.GhError((err or out).strip() or "GitHub CLI command failed", code)
+        return None
+    try:
+        return json.loads(out) if out.strip() else None
+    except json.JSONDecodeError as exc:
+        raise gh.GhError("GitHub CLI returned invalid JSON") from exc
+
+
+def _head_owner_login(pr: dict[str, Any]) -> str:
+    owner = pr.get("headRepositoryOwner")
+    if isinstance(owner, dict):
+        login = owner.get("login")
+        return login if isinstance(login, str) else ""
+    return owner if isinstance(owner, str) else ""
+
+
+async def _github_repo_owner(root: str, identity: ExecutionIdentity) -> str:
+    repo = await _pr_json(root, identity, ["repo", "view", "--json", "nameWithOwner"])
+    name_with_owner = repo.get("nameWithOwner") if isinstance(repo, dict) else ""
+    if not isinstance(name_with_owner, str) or "/" not in name_with_owner:
+        return ""
+    return name_with_owner.split("/", 1)[0]
+
+
+async def _current_branch_pr(root: str, identity: ExecutionIdentity) -> dict[str, Any] | None:
+    git_status = await status(root, identity)
+    branch = str(git_status.get("branch") or "").strip()
+    if not branch or branch in {"HEAD", "(detached)"}:
+        return None
+
+    owner = await _github_repo_owner(root, identity)
+    if not owner:
+        return None
+
+    items = await _pr_json(
+        root,
+        identity,
+        [
+            "pr",
+            "list",
+            "--search",
+            f"head:{owner}:{branch} state:open",
+            "--limit",
+            "10",
+            "--json",
+            PR_JSON_FIELDS,
+        ],
+    )
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("state") or "").lower() != "open":
+            continue
+        if item.get("headRefName") != branch:
+            continue
+        if _head_owner_login(item) != owner:
+            continue
+        return item
+    return None
 
 
 @router.post("/stage")
@@ -562,6 +779,341 @@ async def git_stash_pop(request: Request, body: StashPopRequest):
         return await stash_pop(root, body.index, identity)
     except GitError as e:
         _handle_git_error(e)
+
+
+@router.get("/pr/capabilities")
+async def git_pr_capabilities(request: Request, root: str):
+    root, identity = await _root_identity(request, root)
+    if not await is_repo(root, identity):
+        return {"is_github": False, "gh_installed": False, "authenticated": False}
+    config = await effective_config(root, identity)
+    remote_url = str(config.get("remote_url") or "")
+    is_github = _remote_is_github(remote_url)
+    if not is_github:
+        return {"is_github": False, "gh_installed": False, "authenticated": False}
+    try:
+        auth = await gh.auth_status(identity)
+    except gh.GhError as e:
+        return {
+            "is_github": True,
+            "gh_installed": False,
+            "authenticated": False,
+            "message": str(e),
+        }
+    default_branch = ""
+    if bool(auth.get("installed")) and _gh_has_login(auth):
+        try:
+            repo = await _pr_json(root, identity, ["repo", "view", "--json", "defaultBranchRef"])
+            branch_ref = repo.get("defaultBranchRef") if isinstance(repo, dict) else None
+            if isinstance(branch_ref, dict):
+                default_branch = str(branch_ref.get("name") or "")
+        except gh.GhError:
+            default_branch = ""
+    return {
+        "is_github": True,
+        "gh_installed": bool(auth.get("installed")),
+        "authenticated": _gh_has_login(auth),
+        "default_branch": default_branch,
+        "message": auth.get("message"),
+    }
+
+
+@router.get("/pr/current")
+async def git_pr_current(request: Request, root: str):
+    root, identity = await _root_identity(request, root)
+    await _require_repo(root, identity)
+    try:
+        result = await _current_branch_pr(root, identity)
+        return {"found": bool(result), "pr": result}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.get("/pr/list")
+async def git_pr_list(
+    request: Request,
+    root: str,
+    state: str = "open",
+    scope: str = "all",
+    search: str = "",
+    limit: int = 30,
+):
+    root, identity = await _root_identity(request, root)
+    await _require_repo(root, identity)
+    state = state if state in {"open", "closed", "merged", "all"} else "open"
+    try:
+        if scope == "current":
+            item = await _current_branch_pr(root, identity)
+            return {"items": [item] if item else []}
+        limit = max(1, min(limit, 200))
+        args = ["pr", "list", "--state", state, "--limit", str(limit), "--json", PR_JSON_FIELDS]
+        query = search.strip()
+        if scope == "authored":
+            args.extend(["--author", "@me"])
+        elif scope == "reviewing":
+            query = f"review-requested:@me {query}".strip()
+        if query:
+            args.extend(["--search", query])
+        items = await _pr_json(
+            root,
+            identity,
+            args,
+        )
+        return {"items": items or []}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.get("/pr/view")
+async def git_pr_view(request: Request, root: str, number: int):
+    root, identity = await _root_identity(request, root)
+    await _require_repo(root, identity)
+    try:
+        return await _pr_json(
+            root,
+            identity,
+            ["pr", "view", str(number), "--comments", "--json", PR_DETAIL_JSON_FIELDS],
+        )
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.get("/pr/diff")
+async def git_pr_diff(
+    request: Request,
+    root: str,
+    number: int,
+    ignore_whitespace: bool = False,
+):
+    root, identity = await _root_identity(request, root)
+    await _require_repo(root, identity)
+    args = ["pr", "diff", str(number), "--patch", "--color", "never"]
+    try:
+        _, out, _ = await gh.run_gh(args, identity=identity, cwd=root)
+        return _parse_diff(out)
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.get("/pr/checks")
+async def git_pr_checks(request: Request, root: str, number: int):
+    root, identity = await _root_identity(request, root)
+    await _require_repo(root, identity)
+    try:
+        code, out, err = await gh.run_gh(
+            ["pr", "checks", str(number), "--json", PR_CHECK_FIELDS],
+            identity=identity,
+            cwd=root,
+            check=False,
+        )
+        if code not in {0, 1, 8}:
+            raise gh.GhError((err or out).strip() or "GitHub CLI command failed", code)
+        return {"items": json.loads(out) if out.strip() else []}
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail="GitHub CLI returned invalid JSON") from e
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/checkout")
+async def git_pr_checkout(request: Request, body: PrNumberRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    try:
+        code, out, err = await gh.run_gh(
+            ["pr", "checkout", str(body.number)],
+            identity=identity,
+            cwd=root,
+            check=False,
+        )
+        return {"ok": code == 0, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/create")
+async def git_pr_create(request: Request, body: PrCreateRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="title is required")
+    args = ["pr", "create", "--title", body.title.strip(), "--body", body.body]
+    if body.repo and body.repo.strip():
+        args.extend(["--repo", body.repo.strip()])
+    if body.base:
+        args.extend(["--base", body.base.strip()])
+    if body.head:
+        args.extend(["--head", body.head.strip()])
+    if body.draft:
+        args.append("--draft")
+    if body.reviewers:
+        args.extend(["--reviewer", ",".join(r.strip() for r in body.reviewers if r.strip())])
+    if body.assignees:
+        args.extend(["--assignee", ",".join(a.strip() for a in body.assignees if a.strip())])
+    if body.labels:
+        args.extend(["--label", ",".join(l.strip() for l in body.labels if l.strip())])
+    if body.milestone and body.milestone.strip():
+        args.extend(["--milestone", body.milestone.strip()])
+    if body.project and body.project.strip():
+        args.extend(["--project", body.project.strip()])
+    if not body.maintainer_edit:
+        args.append("--no-maintainer-edit")
+    try:
+        _, out, _ = await gh.run_gh(args, identity=identity, cwd=root)
+        return {"ok": True, "url": out.strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/edit")
+async def git_pr_edit(request: Request, body: PrEditRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    args = ["pr", "edit", str(body.number)]
+    if body.title is not None:
+        args.extend(["--title", body.title])
+    if body.body is not None:
+        args.extend(["--body", body.body])
+    if body.base:
+        args.extend(["--base", body.base.strip()])
+    for value, flag in [
+        (body.add_reviewers, "--add-reviewer"),
+        (body.remove_reviewers, "--remove-reviewer"),
+        (body.add_assignees, "--add-assignee"),
+        (body.remove_assignees, "--remove-assignee"),
+        (body.add_labels, "--add-label"),
+        (body.remove_labels, "--remove-label"),
+    ]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        if cleaned:
+            args.extend([flag, ",".join(cleaned)])
+    if body.milestone:
+        args.extend(["--milestone", body.milestone.strip()])
+    if body.remove_milestone:
+        args.append("--remove-milestone")
+    if len(args) == 3:
+        raise HTTPException(status_code=400, detail="no edits provided")
+    try:
+        _, out, err = await gh.run_gh(args, identity=identity, cwd=root)
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/ready")
+async def git_pr_ready(request: Request, body: PrReadyRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    args = ["pr", "ready", str(body.number)]
+    if body.draft:
+        args.append("--undo")
+    try:
+        _, out, err = await gh.run_gh(args, identity=identity, cwd=root)
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/close")
+async def git_pr_close(request: Request, body: PrCloseRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    args = ["pr", "close", str(body.number)]
+    if body.comment.strip():
+        args.extend(["--comment", body.comment])
+    if body.delete_branch:
+        args.append("--delete-branch")
+    try:
+        _, out, err = await gh.run_gh(args, identity=identity, cwd=root)
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/reopen")
+async def git_pr_reopen(request: Request, body: PrNumberRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    try:
+        _, out, err = await gh.run_gh(
+            ["pr", "reopen", str(body.number)], identity=identity, cwd=root
+        )
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/update-branch")
+async def git_pr_update_branch(request: Request, body: PrUpdateBranchRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    args = ["pr", "update-branch", str(body.number)]
+    if body.rebase:
+        args.append("--rebase")
+    try:
+        _, out, err = await gh.run_gh(args, identity=identity, cwd=root)
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/merge")
+async def git_pr_merge(request: Request, body: PrMergeRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    strategy = body.strategy if body.strategy in {"merge", "squash", "rebase"} else "squash"
+    args = ["pr", "merge", str(body.number), f"--{strategy}"]
+    if body.auto:
+        args.append("--auto")
+    if body.delete_branch:
+        args.append("--delete-branch")
+    if body.subject:
+        args.extend(["--subject", body.subject])
+    if body.body:
+        args.extend(["--body", body.body])
+    try:
+        _, out, err = await gh.run_gh(args, identity=identity, cwd=root)
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/comment")
+async def git_pr_comment(request: Request, body: PrCommentRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    if not body.body.strip():
+        raise HTTPException(status_code=400, detail="body is required")
+    try:
+        _, out, err = await gh.run_gh(
+            ["pr", "comment", str(body.number), "--body", body.body],
+            identity=identity,
+            cwd=root,
+        )
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
+
+
+@router.post("/pr/review")
+async def git_pr_review(request: Request, body: PrReviewRequest):
+    root, identity = await _root_identity(request, body.root)
+    await _require_repo(root, identity)
+    event_flag = {
+        "approve": "--approve",
+        "comment": "--comment",
+        "request_changes": "--request-changes",
+    }.get(body.event)
+    if not event_flag:
+        raise HTTPException(status_code=400, detail="invalid review event")
+    args = ["pr", "review", str(body.number), event_flag]
+    if body.body.strip():
+        args.extend(["--body", body.body])
+    try:
+        _, out, err = await gh.run_gh(args, identity=identity, cwd=root)
+        return {"ok": True, "message": (out + err).strip()}
+    except gh.GhError as e:
+        _handle_gh_error(e)
 
 
 @router.post("/gh/login/start")

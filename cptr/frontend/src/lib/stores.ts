@@ -55,7 +55,7 @@ export interface FileSearchTarget {
 
 export interface Tab {
 	id: string;
-	type: 'home' | 'files' | 'terminal' | 'file' | 'git' | 'chat' | 'preview' | 'browser'; // preview is migrated on load
+	type: 'home' | 'files' | 'terminal' | 'file' | 'chat' | 'preview' | 'browser'; // preview is migrated on load
 	label: string;
 	filePath?: string;
 	edit?: boolean;
@@ -67,6 +67,20 @@ export interface Tab {
 	permanent?: boolean;
 	badge?: number;
 	searchTarget?: FileSearchTarget;
+}
+
+const SUPPORTED_TAB_TYPES = new Set([
+	'home',
+	'files',
+	'terminal',
+	'file',
+	'chat',
+	'preview',
+	'browser'
+]);
+
+function isSupportedTab(tab: { type?: unknown }): tab is Tab {
+	return typeof tab.type === 'string' && SUPPORTED_TAB_TYPES.has(tab.type);
 }
 
 export type SplitDirection = 'horizontal' | 'vertical';
@@ -327,7 +341,8 @@ export const showChangelog = writable(false);
 export const showUpdateToastPref = writable(true);
 export const showSearch = writable(false);
 export const stateLoaded = writable(false);
-export const gitReviewOpen = writable(false);
+export type GitReviewTarget = { kind: 'local' } | { kind: 'pr'; number: number };
+export const gitReviewOpen = writable<GitReviewTarget | null>(null);
 export const isGitRepo = writable(false);
 export type StreamingBehavior = 'queue' | 'interrupt';
 export const streamingBehavior = writable<StreamingBehavior>('queue');
@@ -570,19 +585,23 @@ export async function loadPreferences(): Promise<void> {
 			const aliveBrowsers = new Set(browserIds);
 			let groups = savedHomeState.groups
 				.map((group) => {
-					const tabs = group.tabs.filter(
-						(tab) =>
-							tab.type !== 'terminal' ||
-							(tab.sessionId !== undefined && aliveTerminals.has(tab.sessionId))
-					);
-					const liveTabs = tabs.filter(
-						(tab) =>
-							tab.type !== 'browser' ||
-							(tab.browserSessionId !== undefined && aliveBrowsers.has(tab.browserSessionId))
-					);
+					const tabs = group.tabs.filter((tab): tab is Tab => isSupportedTab(tab));
+					const liveTabs = tabs
+						.filter(
+							(tab) =>
+								tab.type !== 'terminal' ||
+								(tab.sessionId !== undefined && aliveTerminals.has(tab.sessionId))
+						)
+						.filter(
+							(tab) =>
+								tab.type !== 'browser' ||
+								(tab.browserSessionId !== undefined && aliveBrowsers.has(tab.browserSessionId))
+						);
+					const liveIds = new Set(liveTabs.map((tab) => tab.id));
 					return {
 						...group,
 						tabs: liveTabs,
+						tabHistory: (group.tabHistory ?? []).filter((id) => liveIds.has(id)),
 						activeTabId: liveTabs.some((tab) => tab.id === group.activeTabId)
 							? group.activeTabId
 							: (liveTabs[0]?.id ?? '')
@@ -676,6 +695,7 @@ export async function loadWorkspace(path: string): Promise<void> {
 					tabs: (
 						await Promise.all(
 							group.tabs.map(async (tab) => {
+								if (!isSupportedTab(tab)) return null;
 								if (tab.type !== 'preview' || !tab.port) return tab;
 								try {
 									const previewUrl = `http://localhost:${tab.port}/`;
@@ -713,10 +733,12 @@ export async function loadWorkspace(path: string): Promise<void> {
 						}
 						return true;
 					});
+					const liveIds = new Set(filteredTabs.map((t) => t.id));
 					const activeStillExists = filteredTabs.some((t: Tab) => t.id === g.activeTabId);
 					return {
 						...g,
 						tabs: filteredTabs,
+						tabHistory: (g.tabHistory ?? []).filter((id) => liveIds.has(id)),
 						activeTabId: activeStillExists ? g.activeTabId : (filteredTabs[0]?.id ?? 'files')
 					};
 				})

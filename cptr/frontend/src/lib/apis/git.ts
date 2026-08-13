@@ -56,6 +56,61 @@ export interface GitOperationResult {
 	message: string;
 }
 
+export interface GitPrAuthor {
+	login?: string;
+	name?: string;
+}
+
+export interface GitPr {
+	number: number;
+	title: string;
+	url: string;
+	state?: string;
+	isDraft?: boolean;
+	reviewDecision?: string;
+	statusCheckRollup?: unknown[];
+	headRefName?: string;
+	baseRefName?: string;
+	author?: GitPrAuthor;
+	assignees?: GitPrAuthor[];
+	labels?: { name?: string; color?: string; description?: string }[];
+	milestone?: { title?: string } | null;
+	reviewRequests?: unknown[];
+	latestReviews?: unknown[];
+	mergeable?: string;
+	mergeStateStatus?: string;
+	maintainerCanModify?: boolean;
+	createdAt?: string;
+	updatedAt?: string;
+	additions?: number;
+	deletions?: number;
+	changedFiles?: number;
+	body?: string;
+	comments?: unknown[];
+	reviews?: unknown[];
+	commits?: unknown[];
+	files?: unknown[];
+}
+
+export interface GitPrCapabilities {
+	is_github: boolean;
+	gh_installed: boolean;
+	authenticated: boolean;
+	default_branch?: string;
+	message?: string;
+}
+
+export interface GitPrCheck {
+	name?: string;
+	workflow?: string;
+	state?: string;
+	bucket?: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel' | string;
+	description?: string;
+	link?: string;
+	startedAt?: string;
+	completedAt?: string;
+}
+
 // Deduplicate concurrent getGitStatus calls.
 // Multiple components (layout, GitBar, FileEditor × N) all fetch on mount;
 // this ensures they share a single in-flight request and a brief result cache.
@@ -110,9 +165,7 @@ export const getGitStashes = (root: string) =>
 	fetchJSON(`/api/git/stashes?root=${encodeURIComponent(root)}`);
 
 export const getGitConfig = (root?: string) =>
-	fetchJSON<GitSettingsConfig>(
-		`/api/git/config${root ? `?root=${encodeURIComponent(root)}` : ''}`
-	);
+	fetchJSON<GitSettingsConfig>(`/api/git/config${root ? `?root=${encodeURIComponent(root)}` : ''}`);
 
 export const startGhLogin = (hostname = 'github.com', git_protocol = 'https') =>
 	fetchJSON<GhLoginStatus>('/api/git/gh/login/start', jsonBody({ hostname, git_protocol }));
@@ -131,6 +184,126 @@ export const ghSwitch = (hostname: string, user: string) =>
 
 export const ghSetupGit = (hostname = 'github.com') =>
 	fetchJSON('/api/git/gh/setup-git', jsonBody({ hostname }));
+
+export const getGitPrCapabilities = (root: string) =>
+	fetchJSON<GitPrCapabilities>(`/api/git/pr/capabilities?root=${encodeURIComponent(root)}`);
+
+export const getGitCurrentPr = (root: string) =>
+	fetchJSON<{ found: boolean; pr?: GitPr | null }>(
+		`/api/git/pr/current?root=${encodeURIComponent(root)}`
+	);
+
+export const getGitPrList = (
+	root: string,
+	state = 'open',
+	scope = 'all',
+	search = '',
+	limit = 30
+) =>
+	fetchJSON<{ items: GitPr[] }>(
+		`/api/git/pr/list?root=${encodeURIComponent(root)}&state=${encodeURIComponent(state)}&scope=${encodeURIComponent(scope)}&search=${encodeURIComponent(search)}&limit=${limit}`
+	);
+
+export const getGitPrView = (root: string, number: number) =>
+	fetchJSON<GitPr>(
+		`/api/git/pr/view?root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`
+	);
+
+export const getGitPrDiff = (root: string, number: number, ignoreWhitespace = false) =>
+	fetchJSON(
+		`/api/git/pr/diff?root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}&ignore_whitespace=${ignoreWhitespace}`
+	);
+
+export const getGitCompareDiff = (
+	root: string,
+	base: string,
+	head: string,
+	ignoreWhitespace = false
+) =>
+	fetchJSON(
+		`/api/git/compare/diff?root=${encodeURIComponent(root)}&base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}&ignore_whitespace=${ignoreWhitespace}`
+	);
+
+export const getGitPrChecks = (root: string, number: number) =>
+	fetchJSON<{ items: GitPrCheck[] }>(
+		`/api/git/pr/checks?root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`
+	);
+
+export const gitPrCheckout = (root: string, number: number) =>
+	fetchJSON<GitOperationResult>('/api/git/pr/checkout', jsonBody({ root, number }));
+
+export const gitPrCreate = (
+	root: string,
+	body: {
+		title: string;
+		body?: string;
+		repo?: string;
+		base?: string;
+		head?: string;
+		draft?: boolean;
+		reviewers?: string[];
+		assignees?: string[];
+		labels?: string[];
+		milestone?: string;
+		project?: string;
+		maintainer_edit?: boolean;
+	}
+) => fetchJSON<{ ok: boolean; url?: string }>('/api/git/pr/create', jsonBody({ root, ...body }));
+
+export const gitPrEdit = (
+	root: string,
+	number: number,
+	body: {
+		title?: string;
+		body?: string;
+		base?: string;
+		add_reviewers?: string[];
+		remove_reviewers?: string[];
+		add_assignees?: string[];
+		remove_assignees?: string[];
+		add_labels?: string[];
+		remove_labels?: string[];
+		milestone?: string;
+		remove_milestone?: boolean;
+	}
+) => fetchJSON<GitOperationResult>('/api/git/pr/edit', jsonBody({ root, number, ...body }));
+
+export const gitPrReady = (root: string, number: number, draft = false) =>
+	fetchJSON<GitOperationResult>('/api/git/pr/ready', jsonBody({ root, number, draft }));
+
+export const gitPrClose = (
+	root: string,
+	number: number,
+	{ comment = '', delete_branch = false }: { comment?: string; delete_branch?: boolean } = {}
+) => fetchJSON<GitOperationResult>('/api/git/pr/close', jsonBody({ root, number, comment, delete_branch }));
+
+export const gitPrReopen = (root: string, number: number) =>
+	fetchJSON<GitOperationResult>('/api/git/pr/reopen', jsonBody({ root, number }));
+
+export const gitPrUpdateBranch = (root: string, number: number, rebase = false) =>
+	fetchJSON<GitOperationResult>('/api/git/pr/update-branch', jsonBody({ root, number, rebase }));
+
+export const gitPrMerge = (
+	root: string,
+	number: number,
+	body: {
+		strategy?: 'merge' | 'squash' | 'rebase';
+		auto?: boolean;
+		delete_branch?: boolean;
+		subject?: string;
+		body?: string;
+	} = {}
+) => fetchJSON<GitOperationResult>('/api/git/pr/merge', jsonBody({ root, number, ...body }));
+
+export const gitPrComment = (root: string, number: number, body: string) =>
+	fetchJSON<GitOperationResult>('/api/git/pr/comment', jsonBody({ root, number, body }));
+
+export const gitPrReview = (
+	root: string,
+	number: number,
+	event: 'approve' | 'comment' | 'request_changes',
+	body = ''
+) => fetchJSON<GitOperationResult>('/api/git/pr/review', jsonBody({ root, number, event, body }));
 
 export const stageFiles = (root: string, files: string[]) =>
 	fetchJSON('/api/git/stage', jsonBody({ root, files }));
@@ -163,7 +336,8 @@ export const gitPush = (
 		set_upstream = false,
 		branch
 	}: { force?: boolean; set_upstream?: boolean; branch?: string } = {}
-) => fetchJSON<GitOperationResult>('/api/git/push', jsonBody({ root, force, set_upstream, branch }));
+) =>
+	fetchJSON<GitOperationResult>('/api/git/push', jsonBody({ root, force, set_upstream, branch }));
 
 export const gitUncommit = (root: string) => fetchJSON('/api/git/uncommit', jsonBody({ root }));
 
