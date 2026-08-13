@@ -49,7 +49,11 @@ HOME_SYSTEM_PROMPT = (
 def _get_file_tree(workspace: str, max_entries: int = 200) -> str:
     """Generate a compact file tree listing for the workspace."""
     ws = Path(workspace)
-    if not ws.is_dir():
+    try:
+        if not ws.is_dir():
+            return ""
+        items = sorted(ws.iterdir())
+    except OSError:
         return ""
     ignore = {
         ".git",
@@ -65,22 +69,30 @@ def _get_file_tree(workspace: str, max_entries: int = 200) -> str:
         ".DS_Store",
     }
     entries = []
-    for item in sorted(ws.iterdir()):
+    for item in items:
         if item.name in ignore:
             continue
-        suffix = "/" if item.is_dir() else ""
+        try:
+            item_is_dir = item.is_dir()
+        except OSError:
+            item_is_dir = False
+        suffix = "/" if item_is_dir else ""
         entries.append(f"  {item.name}{suffix}")
-        if item.is_dir():
+        if item_is_dir:
             try:
                 for child in sorted(item.iterdir()):
                     if child.name in ignore:
                         continue
-                    csuffix = "/" if child.is_dir() else ""
+                    try:
+                        child_is_dir = child.is_dir()
+                    except OSError:
+                        child_is_dir = False
+                    csuffix = "/" if child_is_dir else ""
                     entries.append(f"    {child.name}{csuffix}")
                     if len(entries) >= max_entries:
                         entries.append("    ...")
                         break
-            except PermissionError:
+            except OSError:
                 pass
         if len(entries) >= max_entries:
             break
@@ -90,13 +102,20 @@ def _get_file_tree(workspace: str, max_entries: int = 200) -> str:
 def _load_instruction_files(workspace: str, max_bytes: int = 32_000) -> str:
     """Load well-known AI instruction files from workspace root."""
     ws = Path(workspace)
-    if not ws.is_dir():
+    try:
+        if not ws.is_dir():
+            return ""
+    except OSError:
         return ""
     parts: list[str] = []
     total = 0
     for name in INSTRUCTION_FILENAMES:
         path = ws / name
-        if path.is_file():
+        try:
+            is_file = path.is_file()
+        except OSError:
+            is_file = False
+        if is_file:
             remaining = max_bytes - total
             if remaining <= 0:
                 break
@@ -141,6 +160,15 @@ def _safe_version() -> str:
         return "dev"
 
 
+def _workspace_name(path: Path | None) -> str:
+    if not path:
+        return ""
+    try:
+        return path.name if path.is_dir() else ""
+    except OSError:
+        return path.name
+
+
 def _format_cptr_context(
     workspace: str, model: str = "", home: str | None = None, shell: str | None = None
 ) -> str:
@@ -176,7 +204,7 @@ def _format_cptr_context(
         [
             "",
             "Workspace:",
-            f"- Name: {ws_path.name if ws_path.is_dir() else ''}",
+            f"- Name: {_workspace_name(ws_path)}",
             f"- Path: {ws_path}",
             "",
             "Tool behavior:",
@@ -250,7 +278,7 @@ def _build_template_variables(
     skills_block = build_catalog_xml(discover_skills(workspace)) if skills_enabled else ""
 
     return {
-        "WORKSPACE_NAME": ws_path.name if ws_path and ws_path.is_dir() else "",
+        "WORKSPACE_NAME": _workspace_name(ws_path),
         "WORKSPACE_PATH": str(ws_path) if ws_path else "",
         "FILE_TREE": _get_file_tree(workspace) if workspace else "",
         "INSTRUCTIONS": instructions_block,

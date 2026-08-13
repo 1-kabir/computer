@@ -434,13 +434,19 @@ def _is_text_file(path: Path) -> bool:
 
 def _list_directory(path: str) -> dict[str, Any]:
     target = _path(path)
-    if not target.exists():
-        raise _missing(path)
-    if not target.is_dir():
-        raise FileError(f"Not a directory: {path}")
+    try:
+        if not target.exists():
+            raise _missing(path)
+        if not target.is_dir():
+            raise FileError(f"Not a directory: {path}")
+        items = list(target.iterdir())
+    except FileError:
+        raise
+    except PermissionError as exc:
+        raise FileError(f"Permission denied: {path}", 403) from exc
 
     entries = []
-    for item in target.iterdir():
+    for item in items:
         try:
             st = item.stat()
             kind = "symlink" if item.is_symlink() else "directory" if item.is_dir() else "file"
