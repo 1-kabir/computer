@@ -1463,7 +1463,7 @@
 				</div>
 			{/if}
 			{#if $gitReviewOpen && group.id === allGroups[0]?.id}
-				<div class="persisted-tab git-review-tab">
+				<div class="persisted-tab git-review-panel">
 					<GitView />
 				</div>
 			{/if}
@@ -1674,7 +1674,7 @@
 		pointer-events: none;
 	}
 
-	.git-review-tab {
+	.git-review-panel {
 		z-index: 2;
 	}
 </style>
