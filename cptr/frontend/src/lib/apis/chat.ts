@@ -200,8 +200,8 @@ export const answerAskUser = (
 	timedOut = false
 ) =>
 	fetchJSON(
-		`/api/chats/${chatId}/messages/${messageId}/answer`,
-		jsonBody({ call_id: callId, answers, timed_out: timedOut })
+		`/api/chats/${chatId}/messages/${messageId}/approve`,
+		jsonBody({ call_id: callId, approved: true, answers, timed_out: timedOut })
 	);
 
 export const cancelTask = (chatId: string, messageId: string) =>

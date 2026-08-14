@@ -1210,11 +1210,7 @@ async def compact_chat(request: Request, chat_id: str, body: CompactRequest):
 class ApproveRequest(BaseModel):
     call_id: str
     approved: bool = True
-
-
-class AskUserAnswerRequest(BaseModel):
-    call_id: str
-    answers: dict[str, str]
+    answers: dict[str, str] | None = None
     timed_out: bool = False
 
 
@@ -1287,27 +1283,6 @@ async def resolve_ask_user(
     )
 
 
-@router.post("/{chat_id}/messages/{message_id}/answer")
-async def answer_ask_user(
-    chat_id: str, message_id: str, body: AskUserAnswerRequest, request: Request
-):
-    """Resolve a pending Plan-mode ask_user request and resume the chat."""
-    user_id = _get_user(request)
-    chat = await Chat.get_by_id(chat_id)
-    if not chat or chat.user_id != user_id:
-        raise HTTPException(404, "chat not found")
-
-    try:
-        await resolve_ask_user(
-            request.app, chat_id, message_id, body.call_id, body.answers, body.timed_out
-        )
-    except AskUserNotPendingError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    return {"ok": True}
-
-
 @router.post("/{chat_id}/messages/{message_id}/approve")
 async def approve_tool(request: Request, chat_id: str, message_id: str, body: ApproveRequest):
     """Execute or reject a pending tool call, then continue."""
@@ -1334,6 +1309,24 @@ async def approve_tool(request: Request, chat_id: str, message_id: str, body: Ap
 
     if not call:
         raise HTTPException(400, "no pending tool call with that call_id")
+
+    if call.get("name") == "ask_user" and body.approved:
+        if body.answers is None and not body.timed_out:
+            raise HTTPException(400, "answers are required for ask_user")
+        try:
+            await resolve_ask_user(
+                request.app,
+                chat_id,
+                message_id,
+                body.call_id,
+                body.answers,
+                body.timed_out,
+            )
+        except AskUserNotPendingError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"ok": True}
 
     model_id = msg.model or ""
     workspace = chat.meta.get("workspace", "") if chat.meta else ""
