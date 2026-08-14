@@ -181,15 +181,23 @@ export const sendMessage = (
 		})
 	);
 
-export const approveToolCall = (
+export type ToolResolveAction = 'approve' | 'reject' | 'answer';
+
+export const resolveToolCall = (
 	chatId: string,
 	messageId: string,
 	callId: string,
-	approved = true
+	action: ToolResolveAction,
+	options: { answers?: Record<string, string>; timedOut?: boolean } = {}
 ) =>
 	fetchJSON(
-		`/api/chats/${chatId}/messages/${messageId}/approve`,
-		jsonBody({ call_id: callId, approved })
+		`/api/chats/${chatId}/messages/${messageId}/resolve`,
+		jsonBody({
+			call_id: callId,
+			action,
+			...(options.answers ? { answers: options.answers } : {}),
+			...(options.timedOut ? { timed_out: options.timedOut } : {})
+		})
 	);
 
 export const answerAskUser = (
@@ -199,10 +207,7 @@ export const answerAskUser = (
 	answers: Record<string, string>,
 	timedOut = false
 ) =>
-	fetchJSON(
-		`/api/chats/${chatId}/messages/${messageId}/approve`,
-		jsonBody({ call_id: callId, approved: true, answers, timed_out: timedOut })
-	);
+	resolveToolCall(chatId, messageId, callId, 'answer', { answers, timedOut });
 
 export const cancelTask = (chatId: string, messageId: string) =>
 	fetchJSON(`/api/chats/${chatId}/messages/${messageId}/cancel`, { method: 'POST' });

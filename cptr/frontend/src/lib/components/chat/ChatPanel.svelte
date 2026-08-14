@@ -6,7 +6,7 @@
 		updateChatTitle,
 		forkChat as apiForkChat,
 		sendMessage as apiSendMessage,
-		approveToolCall,
+		resolveToolCall,
 		answerAskUser,
 		cancelTask,
 		compactChat as apiCompactChat,
@@ -1278,7 +1278,7 @@
 			}
 		}
 
-		approveToolCall(chatId, messageId, callId, approved).catch((err) => {
+		resolveToolCall(chatId, messageId, callId, approved ? 'approve' : 'reject').catch((err) => {
 			console.error('[chat] approve error', err);
 			// Revert on failure: reload from DB to get true state
 			loadChat(chatId!);

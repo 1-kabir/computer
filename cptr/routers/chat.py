@@ -8,7 +8,7 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import json
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -1204,12 +1204,12 @@ async def compact_chat(request: Request, chat_id: str, body: CompactRequest):
     }
 
 
-# ── Approve / reject a pending tool call ────────────────────
+# ── Resolve a pending tool call ─────────────────────────────
 
 
-class ApproveRequest(BaseModel):
+class ResolveRequest(BaseModel):
     call_id: str
-    approved: bool = True
+    action: Literal["approve", "reject", "answer"] = "approve"
     answers: dict[str, str] | None = None
     timed_out: bool = False
 
@@ -1283,9 +1283,10 @@ async def resolve_ask_user(
     )
 
 
-@router.post("/{chat_id}/messages/{message_id}/approve")
-async def approve_tool(request: Request, chat_id: str, message_id: str, body: ApproveRequest):
-    """Execute or reject a pending tool call, then continue."""
+async def resolve_pending_tool_call(
+    request: Request, chat_id: str, message_id: str, body: ResolveRequest
+):
+    """Resolve a pending function_call, then continue the assistant message."""
     user_id = _get_user(request)
     chat = await Chat.get_by_id(chat_id)
     if not chat or chat.user_id != user_id:
@@ -1310,7 +1311,9 @@ async def approve_tool(request: Request, chat_id: str, message_id: str, body: Ap
     if not call:
         raise HTTPException(400, "no pending tool call with that call_id")
 
-    if call.get("name") == "ask_user" and body.approved:
+    if body.action == "answer":
+        if call.get("name") != "ask_user":
+            raise HTTPException(400, "tool call does not accept answers")
         if body.answers is None and not body.timed_out:
             raise HTTPException(400, "answers are required for ask_user")
         try:
@@ -1328,11 +1331,14 @@ async def approve_tool(request: Request, chat_id: str, message_id: str, body: Ap
             raise HTTPException(422, str(exc)) from exc
         return {"ok": True}
 
+    if body.action == "approve" and call.get("name") == "ask_user":
+        raise HTTPException(400, "ask_user requires answer or reject")
+
     model_id = msg.model or ""
     workspace = chat.meta.get("workspace", "") if chat.meta else ""
     from cptr.socket.main import emit_to_user
 
-    if body.approved:
+    if body.action == "approve":
         call["approved"] = True
         call["status"] = "queued"
         await ChatMessage.update(message_id, output=output, done=False)
@@ -1370,6 +1376,11 @@ async def approve_tool(request: Request, chat_id: str, message_id: str, body: Ap
     )
 
     return {"ok": True}
+
+
+@router.post("/{chat_id}/messages/{message_id}/resolve")
+async def resolve_tool(request: Request, chat_id: str, message_id: str, body: ResolveRequest):
+    return await resolve_pending_tool_call(request, chat_id, message_id, body)
 
 
 # ── Cancel a running task ───────────────────────────────────
