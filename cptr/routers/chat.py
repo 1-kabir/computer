@@ -1268,7 +1268,7 @@ async def resolve_ask_user(
     await emit_to_user(
         chat.user_id, {"chat_id": chat_id, "message_id": message_id, "output": output[-1]}
     )
-    target = await resolve_model_target(msg.model or "", app.state)
+    target = await resolve_model_target(msg.model or "", getattr(app, "state", None))
     start_task(
         None,
         message_id=message_id,
