@@ -1269,8 +1269,16 @@ async def resolve_ask_user(
         chat.user_id, {"chat_id": chat_id, "message_id": message_id, "output": output[-1]}
     )
     target = await resolve_model_target(msg.model or "", getattr(app, "state", None))
+    task_request = None
+    if app is not None:
+        try:
+            from cptr.utils.identity import internal_request_for_user
+
+            task_request = await internal_request_for_user(app, chat.user_id)
+        except Exception:
+            log.debug("[ask_user] internal request creation failed", exc_info=True)
     start_task(
-        None,
+        task_request,
         message_id=message_id,
         chat_id=chat_id,
         user_id=chat.user_id,

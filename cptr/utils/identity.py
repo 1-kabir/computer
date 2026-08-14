@@ -95,6 +95,8 @@ def _identity_from_auth(auth: AuthResult | None) -> ExecutionIdentity:
 
 
 async def identity_for_request(request) -> ExecutionIdentity:
+    if request is None:
+        return _identity_from_auth(None)
     return _identity_from_auth(getattr(request.state, "auth", None))
 
 

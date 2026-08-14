@@ -1403,6 +1403,16 @@ async def run_chat_task(
     output_queue: asyncio.Queue | None = None,
 ):
     """Plain async function. Makes raw API calls in a loop."""
+    if request is None:
+        try:
+            from cptr.app import app as cptr_app
+            from cptr.utils.identity import internal_request_for_user
+
+            request = await internal_request_for_user(cptr_app, user_id)
+        except Exception:
+            logger.debug(
+                "[task %s] internal request creation failed", message_id[:8], exc_info=True
+            )
 
     async def emit(**data):
         """Stream an output delta to the user."""
