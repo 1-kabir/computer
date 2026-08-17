@@ -1988,15 +1988,6 @@ async def run_chat_task(
         }
         review_builtin_tools = builtin_tools
 
-        # Tool approval mode: 'ask' | 'auto' | 'full'
-        #   ask  = require approval for ALL tools (including reads)
-        #   auto = run allow tools; review review tools before prompting
-        #   full = auto-approve everything
-        approval_mode = chat_params.get("tool_approval_mode", "auto")
-        # Legacy compat: old boolean auto_approve_tools
-        if "tool_approval_mode" not in chat_params and "auto_approve_tools" in chat_params:
-            approval_mode = "full" if chat_params["auto_approve_tools"] else "auto"
-
         async def run_queued_tool_calls(tool_ctx: dict) -> str:
             """Run queued tool calls until approval is needed or the queue is empty.
 
@@ -2022,6 +2013,19 @@ async def run_chat_task(
                 name = item.get("name", "")
                 tool = ALL_TOOLS.get(name)
                 tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
+                current_chat = await Chat.get_by_id(chat_id)
+                current_params = (
+                    (current_chat.meta or {}).get("params", {}) if current_chat else chat_params
+                )
+                current_params = current_params if isinstance(current_params, dict) else {}
+                approval_mode = current_params.get("tool_approval_mode")
+                if approval_mode not in {"ask", "auto", "full"}:
+                    approval_mode = (
+                        "full"
+                        if "tool_approval_mode" not in current_params
+                        and current_params.get("auto_approve_tools")
+                        else "auto"
+                    )
                 should_auto = approval_mode == "full" or (
                     approval_mode == "auto" and tool and tool_approval == "allow"
                 )
@@ -2534,6 +2538,19 @@ async def run_chat_task(
                             loaded_skill_names.add(skill_name)
                     tool = ALL_TOOLS.get(name)
                     tool_approval = await resolve_builtin_tool_approval(name) if tool else "review"
+                    current_chat = await Chat.get_by_id(chat_id)
+                    current_params = (
+                        (current_chat.meta or {}).get("params", {}) if current_chat else chat_params
+                    )
+                    current_params = current_params if isinstance(current_params, dict) else {}
+                    approval_mode = current_params.get("tool_approval_mode")
+                    if approval_mode not in {"ask", "auto", "full"}:
+                        approval_mode = (
+                            "full"
+                            if "tool_approval_mode" not in current_params
+                            and current_params.get("auto_approve_tools")
+                            else "auto"
+                        )
                     should_auto = approval_mode == "full" or (
                         approval_mode == "auto" and tool and tool_approval == "allow"
                     )

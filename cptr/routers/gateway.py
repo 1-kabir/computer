@@ -753,6 +753,18 @@ async def _ensure_chat(
                     meta.get("client_chat_id") == client_chat_id
                     or meta.get("owui_chat_id") == client_chat_id
                 ):
+                    normalized = dict(meta)
+                    normalized["workspace"] = workspace
+                    params = (
+                        normalized.get("params")
+                        if isinstance(normalized.get("params"), dict)
+                        else {}
+                    )
+                    normalized["params"] = {**params, "tool_approval_mode": "full"}
+                    normalized["client_chat_id"] = client_chat_id
+                    normalized["owui_chat_id"] = client_chat_id
+                    if normalized != meta:
+                        await Chat.update_meta(chat.id, normalized, now_ms())
                     return chat.id
 
     # Create a new chat

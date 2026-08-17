@@ -844,6 +844,41 @@ async def update_chat_settings(request: Request, chat_id: str, body: UpdateChatS
     meta["last_model"] = body.model_id
     meta["params"] = body.params
     await Chat.update_meta(chat_id, meta, now_ms())
+    params = body.params if isinstance(body.params, dict) else {}
+    approval_mode = params.get("tool_approval_mode")
+    if approval_mode not in {"ask", "auto", "full"}:
+        approval_mode = (
+            "full"
+            if "tool_approval_mode" not in params and params.get("auto_approve_tools")
+            else "auto"
+        )
+    if approval_mode in {"auto", "full"} and chat.current_message_id:
+        msg = await ChatMessage.get_by_id(chat.current_message_id)
+        output = (msg.output or []) if msg else []
+        pending_tool_approval = any(
+            item.get("type") == "function_call"
+            and item.get("status") == "pending"
+            and item.get("name") != "ask_user"
+            for item in output
+        )
+        if msg and msg.role == "assistant" and not msg.done and pending_tool_approval:
+            from cptr.utils.chat_task import is_running, start_task
+
+            if msg.model and not is_running(msg.id):
+                try:
+                    from cptr.utils.model_targets import resolve_model_target
+
+                    target = await resolve_model_target(msg.model, request.app.state)
+                    start_task(
+                        request,
+                        message_id=msg.id,
+                        chat_id=chat.id,
+                        user_id=chat.user_id,
+                        workspace=meta.get("workspace", ""),
+                        target=target,
+                    )
+                except Exception:
+                    log.debug("[chat-settings] pending tool continuation failed", exc_info=True)
     return {"ok": True}
 
 
