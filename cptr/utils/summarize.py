@@ -63,12 +63,12 @@ async def summarize_messages(
         text = text[:15_000] + "\n...\n" + text[-10_000:]
 
     try:
-        from cptr.models import Config
         from cptr.utils.ai import generate_text
+        from cptr.utils.utility_models import configured_utility_model
 
         result = await generate_text(
             None,
-            model_id=await Config.get("chat.context_compaction.model"),
+            model_id=await configured_utility_model("summary_generation"),
             active_connection=connection,
             active_model=model,
             messages=[{"role": "user", "content": text}],

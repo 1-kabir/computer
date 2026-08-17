@@ -505,12 +505,6 @@ _UTILITY_PATTERNS = [
     "tags_generation",
 ]
 
-_UTILITY_MODEL_CONFIG_KEYS = {
-    "summary_generation": "chat.context_compaction.model",
-    "title_generation": "chat.title_generation.model",
-}
-
-
 async def _intercept_task(
     request: Request,
     body: ChatCompletionRequest,
@@ -700,11 +694,11 @@ async def _resolve_utility_model(request: Request, workspace: str, app_state=Non
 
     candidates: list[str] = []
     task_header = request.headers.get(OWUI_TASK_HEADER, "").strip()
-    preferred_config_key = _UTILITY_MODEL_CONFIG_KEYS.get(task_header)
-    if preferred_config_key:
-        preferred_model = await Config.get(preferred_config_key)
-        if isinstance(preferred_model, str) and preferred_model.strip():
-            candidates.append(preferred_model.strip())
+    if task_header:
+        from cptr.utils.utility_models import configured_utility_model
+
+        if preferred_model := await configured_utility_model(task_header):
+            candidates.append(preferred_model)
 
     gateway_model = await Config.get("gateway.model")
     if isinstance(gateway_model, str) and gateway_model.strip():

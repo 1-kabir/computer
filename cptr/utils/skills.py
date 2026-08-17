@@ -799,9 +799,9 @@ async def run_skill_review(
     skill_create_requested: bool,
 ) -> None:
     try:
-        from cptr.models import Config
         from cptr.utils.ai import generate_json
         from cptr.utils.memory import summarize_recent_conversation
+        from cptr.utils.utility_models import configured_utility_model
 
         skills = discover_skills(workspace)
         transcript = summarize_recent_conversation(conversation_messages, assistant_reply)
@@ -844,7 +844,7 @@ async def run_skill_review(
         )
         parsed = await generate_json(
             None,
-            model_id=await Config.get("skills.background_review.model"),
+            model_id=await configured_utility_model("skills_background_review"),
             active_connection=model_connection,
             active_model=model,
             messages=[{"role": "user", "content": prompt}],

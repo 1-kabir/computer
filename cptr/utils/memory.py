@@ -1652,13 +1652,14 @@ async def run_memory_review(
 ) -> None:
     try:
         from cptr.utils.ai import generate_json
+        from cptr.utils.utility_models import configured_utility_model
 
         memory_state = await read_memory_state(request, user_id, workspace)
         transcript = summarize_recent_conversation(conversation_messages, assistant_reply)
         prompt = build_memory_review_prompt(memory_state, workspace, transcript)
         parsed = await generate_json(
             None,
-            model_id=await Config.get("memory.background_review.model"),
+            model_id=await configured_utility_model("memory_background_review"),
             active_connection=model_connection,
             active_model=model,
             messages=[{"role": "user", "content": prompt}],

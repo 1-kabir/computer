@@ -763,7 +763,9 @@ async def review_tool_approval(
     args_text = json.dumps(arguments, ensure_ascii=False, default=str)
     if len(args_text) > 4000:
         args_text = args_text[:3500] + "\n...(truncated)"
-    configured_model = await Config.get("tool_approval.review.model")
+    from cptr.utils.utility_models import configured_utility_model
+
+    configured_model = await configured_utility_model("tool_approval_review")
     logger.info(
         "[tool-approval] auto review start tool=%s policy=%s active_model=%s review_model=%s args=%s",
         tool_name,
@@ -828,9 +830,11 @@ async def generate_chat_title(
         truncated += "..."
 
     try:
+        from cptr.utils.utility_models import configured_utility_model
+
         parsed = await generate_json(
             None,
-            model_id=await Config.get("chat.title_generation.model"),
+            model_id=await configured_utility_model("title_generation"),
             active_connection=connection,
             active_model=model,
             messages=[{"role": "user", "content": truncated}],

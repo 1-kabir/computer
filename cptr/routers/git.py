@@ -642,13 +642,14 @@ async def generate_commit_message(request: Request, body: CommitMessageRequest):
     if not patch:
         raise HTTPException(status_code=400, detail="No staged changes")
 
-    from cptr.models import Config
-
     message_model = body.model_id.strip() if isinstance(body.model_id, str) else None
     if message_model is None:
-        configured_model = await Config.get("git.commit_message_generation.model")
-        message_model = configured_model.strip() if isinstance(configured_model, str) else None
+        from cptr.utils.utility_models import configured_utility_model
+
+        message_model = await configured_utility_model("git_commit_message_generation")
     if not message_model:
+        from cptr.models import Config
+
         default_model = await Config.get("chat.default_model")
         message_model = default_model.strip() if isinstance(default_model, str) else None
     text = await generate_text(
