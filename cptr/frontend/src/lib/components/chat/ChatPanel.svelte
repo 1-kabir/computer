@@ -10,6 +10,8 @@
 		answerAskUser,
 		cancelTask,
 		compactChat as apiCompactChat,
+		listChatSubagents,
+		cancelChatSubagent,
 		updateCurrentMessage,
 		updateMessage,
 		createMessage,
@@ -20,6 +22,7 @@
 		type ChatSendParams,
 		type ChatInfo,
 		type ToolApprovalMode,
+		type SubagentInfo,
 		type ContextUsage,
 		type ChatTask
 	} from '$lib/apis/chat';
@@ -125,6 +128,7 @@
 	let currentMessageId = $state<string | null>(null);
 	let contextUsage = $state<ContextUsage | null>(null);
 	let chatTasks = $state<ChatTask[]>([]);
+	let chatSubagents = $state<SubagentInfo[]>([]);
 	let showStatusModal = $state(false);
 	let showSkillsModal = $state(false);
 	let skillsModalList = $state<SkillInfo[]>([]);
@@ -152,6 +156,7 @@
 	let speakingMessageId = $state<string | null>(null);
 	let ttsStopRequested = false;
 	let commandSessionsChatId: string | null = null;
+	let subagentsChatId: string | null = null;
 	let taskClearTimer: ReturnType<typeof setTimeout> | null = null;
 	// This browser memory cache only helps while the current page is open, such as when
 	// someone taps the same speak button twice. The backend cache is the durable source
@@ -394,6 +399,31 @@
 		if (chatId) refreshCommandSessions();
 	});
 
+	async function refreshSubagents(id: string) {
+		try {
+			const data = await listChatSubagents(id);
+			chatSubagents = data.subagents ?? [];
+		} catch {
+			chatSubagents = [];
+		}
+	}
+
+	async function handleKillSubagent(delegationId: string) {
+		if (!chatId) return;
+		try {
+			await cancelChatSubagent(chatId, delegationId);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : String(e));
+		}
+	}
+
+	$effect(() => {
+		if (chatId === subagentsChatId) return;
+		subagentsChatId = chatId;
+		chatSubagents = [];
+		if (chatId) refreshSubagents(chatId);
+	});
+
 	// ── Load chat from DB ───────────────────────────────────────
 
 	let loadGeneration = 0;
@@ -553,6 +583,7 @@
 		error?: string;
 		pending_inputs_processed?: boolean;
 		async_subagent_pending?: boolean;
+		subagents?: SubagentInfo[];
 		title?: string;
 		workspace?: string;
 		active?: boolean;
@@ -613,6 +644,12 @@
 
 		if (data.type === 'chat:tasks') {
 			setChatTasks(data.tasks ?? []);
+			return;
+		}
+
+		if (data.type === 'chat:subagents') {
+			if (Array.isArray(data.subagents)) chatSubagents = data.subagents;
+			else if (chatId) refreshSubagents(chatId);
 			return;
 		}
 
@@ -1812,6 +1849,8 @@
 					{workspace}
 					placeholder={$t('chat.placeholder', { name: workspaceDisplayName })}
 					tasks={chatTasks}
+					subagents={chatSubagents}
+					onkillsubagent={handleKillSubagent}
 					askUser={pendingAskUser}
 					onaskuseranswer={handleAskUserAnswer}
 					onsend={send}
@@ -1941,6 +1980,8 @@
 					{contextUsage}
 					{hasChatContent}
 					tasks={chatTasks}
+					subagents={chatSubagents}
+					onkillsubagent={handleKillSubagent}
 					askUser={pendingAskUser}
 					onaskuseranswer={handleAskUserAnswer}
 					onsend={send}
