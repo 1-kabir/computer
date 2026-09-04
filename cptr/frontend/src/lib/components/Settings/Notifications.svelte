@@ -2,7 +2,12 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { t } from '$lib/i18n';
-	import { notificationsEnabled, notificationSound } from '$lib/stores/chat';
+	import {
+		notificationsEnabled,
+		notificationSound,
+		bridgeNotificationsMuted
+	} from '$lib/stores/chat';
+	import { savePreferences } from '$lib/apis/state';
 	import {
 		createNotificationTarget,
 		CHAT_NOTIFICATION_EVENTS,
@@ -162,7 +167,9 @@
 			formOpen = false;
 			toast.success($t('settings.saved'));
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed'));
+			toast.error(
+				error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed')
+			);
 		} finally {
 			savingTarget = false;
 		}
@@ -173,7 +180,9 @@
 			await updateNotificationTarget(target.id, patch as any);
 			await loadNotificationTargets();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed'));
+			toast.error(
+				error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed')
+			);
 		}
 	}
 
@@ -182,7 +191,9 @@
 			await deleteNotificationTarget(target.id);
 			await loadNotificationTargets();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed'));
+			toast.error(
+				error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed')
+			);
 		}
 	}
 
@@ -191,7 +202,9 @@
 			await setDefaultNotificationTarget(target.id);
 			await loadNotificationTargets();
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed'));
+			toast.error(
+				error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed')
+			);
 		}
 	}
 
@@ -200,7 +213,9 @@
 			await testNotificationTarget(target.id);
 			toast.success($t('general.testSent'));
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed'));
+			toast.error(
+				error instanceof Error ? error.message : $t('general.notificationTargetSaveFailed')
+			);
 		}
 	}
 </script>
@@ -229,6 +244,19 @@
 				<ToggleSwitch value={$notificationSound} onchange={(v) => notificationSound.set(v)} />
 			</label>
 
+			<label class="flex items-center justify-between cursor-pointer">
+				<span class="text-xs text-gray-600 dark:text-gray-400">
+					{$t('general.bridgeNotificationsMuted')}
+				</span>
+				<ToggleSwitch
+					value={$bridgeNotificationsMuted}
+					onchange={(v) => bridgeNotificationsMuted.set(v)}
+				/>
+			</label>
+			<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+				{$t('general.bridgeNotificationsMutedDesc')}
+			</p>
+
 			<div class="mt-3 flex items-center justify-between">
 				<span class="text-xs font-medium text-gray-700 dark:text-gray-300">
 					{$t('general.notificationTargets')}
@@ -253,7 +281,9 @@
 				<div class="flex flex-col">
 					{#each targets as target}
 						{@const targetDestination =
-							target.type === 'webhook' ? target.config.url_masked : target.config.destination_chat_id}
+							target.type === 'webhook'
+								? target.config.url_masked
+								: target.config.destination_chat_id}
 						{@const alertLabels = eventOptions
 							.filter((event) => target.events.includes(event.event))
 							.map((event) => event.label)
@@ -273,13 +303,19 @@
 										</span>
 									{/if}
 								</div>
-								<div class="truncate text-[0.625rem] text-gray-400 dark:text-gray-600 leading-tight">
+								<div
+									class="truncate text-[0.625rem] text-gray-400 dark:text-gray-600 leading-tight"
+								>
 									{targetDestination}
 								</div>
-								<div class="truncate text-[0.625rem] text-gray-400 dark:text-gray-600 leading-tight">
+								<div
+									class="truncate text-[0.625rem] text-gray-400 dark:text-gray-600 leading-tight"
+								>
 									{alertLabels || $t('general.noChatAlerts')}
 									{#if target.events.length}
-										· {target.delivery === 'away' ? $t('general.onlyWhenAway') : $t('general.always')}
+										· {target.delivery === 'away'
+											? $t('general.onlyWhenAway')
+											: $t('general.always')}
 									{/if}
 								</div>
 							</div>
@@ -367,7 +403,9 @@
 				<input
 					type="url"
 					bind:value={form.url}
-					placeholder={editingId ? $t('general.keepWebhookUrl') : 'https://hooks.slack.com/services/...'}
+					placeholder={editingId
+						? $t('general.keepWebhookUrl')
+						: 'https://hooks.slack.com/services/...'}
 					autocomplete="off"
 					spellcheck="false"
 					class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-none py-0.5 font-mono"

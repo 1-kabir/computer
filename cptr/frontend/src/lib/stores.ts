@@ -29,7 +29,7 @@ import { listSessions, createSession, deleteSession } from '$lib/apis/terminal';
 import { createBrowserSession, deleteBrowserSession, listBrowserSessions } from '$lib/apis/browser';
 import { changeLocale, i18next } from '$lib/i18n';
 import { requestConfirm } from '$lib/stores/confirm';
-import { streamingChatTabs } from '$lib/stores/chat';
+import { streamingChatTabs, bridgeNotificationsMuted } from '$lib/stores/chat';
 import { keybindings, loadKeybindings } from '$lib/stores/keybindings';
 import { defaultPwaPreferences, type PwaPreferences } from '$lib/intents/types';
 import { getPathDisplayName, isSupportedWorkspacePath } from '$lib/utils/paths';
@@ -143,6 +143,7 @@ export interface UserPreferences {
 	textScale?: number | null;
 	widescreenMode?: boolean;
 	expandToolDetails?: boolean;
+	bridgeNotificationsMuted?: boolean;
 	homeGroup?: EditorGroup;
 	homeState?: HomeState;
 	git?: {
@@ -461,6 +462,7 @@ function persistPreferences(): void {
 			textScale: get(textScale),
 			widescreenMode: get(widescreenMode),
 			expandToolDetails: get(expandToolDetails),
+			bridgeNotificationsMuted: get(bridgeNotificationsMuted),
 			homeState: get(homeState)
 		};
 		savePreferences(prefs as unknown as Record<string, unknown>).catch(() => {});
@@ -519,6 +521,9 @@ function subscribeForPersistence() {
 	expandToolDetails.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
+	bridgeNotificationsMuted.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
 	i18next.on('languageChanged', () => {
 		if (get(stateLoaded)) persistPreferences();
 	});
@@ -565,6 +570,8 @@ export async function loadPreferences(): Promise<void> {
 		if (prefs.widescreenMode !== undefined) widescreenMode.set(prefs.widescreenMode as boolean);
 		if (prefs.expandToolDetails !== undefined)
 			expandToolDetails.set(prefs.expandToolDetails as boolean);
+		if (prefs.bridgeNotificationsMuted !== undefined)
+			bridgeNotificationsMuted.set(prefs.bridgeNotificationsMuted as boolean);
 		const savedHomeGroup = prefs.homeGroup as EditorGroup | undefined;
 		const savedHomeState =
 			(prefs.homeState as HomeState | undefined) ??

@@ -816,8 +816,14 @@ async def update_chat(request: Request, chat_id: str, body: UpdateChatRequest):
     from cptr.utils.chat_task import get_active_chat_ids
     from cptr.socket.main import emit_to_user
 
+    from cptr.models.users import UserStates
+
+    mute_bridge = await UserStates.get_flag(user_id, "bridge_notifications_muted")
     unread_counts = await Chat.unread_counts_by_workspace(
-        user_id, [workspace], get_active_chat_ids()
+        user_id,
+        [workspace],
+        get_active_chat_ids(),
+        exclude_bridge=mute_bridge,
     )
     await emit_to_user(
         user_id,
@@ -915,8 +921,14 @@ async def delete_chat(request: Request, chat_id: str):
     from cptr.socket.main import emit_to_user
     from cptr.utils.chat_task import get_active_chat_ids
 
+    from cptr.models.users import UserStates
+
+    mute_bridge = await UserStates.get_flag(user_id, "bridge_notifications_muted")
     unread_counts = await Chat.unread_counts_by_workspace(
-        user_id, [workspace or ""], get_active_chat_ids()
+        user_id,
+        [workspace or ""],
+        get_active_chat_ids(),
+        exclude_bridge=mute_bridge,
     )
     await emit_to_user(
         user_id,

@@ -236,3 +236,10 @@ class UserStates(Base):
             else:
                 db.add(UserStates(user_id=user_id, data=data))
             await db.commit()
+
+    @staticmethod
+    async def get_flag(user_id: str, key: str, default: bool = False) -> bool:
+        """Read a boolean preference flag from user state data."""
+        data = await UserStates.get_data(user_id)
+        value = data.get(key, default)
+        return value in (True, "true", "1", 1) if isinstance(value, (bool, str, int)) else default

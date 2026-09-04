@@ -1444,9 +1444,11 @@ async def run_chat_task(
             chat_obj = await Chat.get_by_id(chat_id)
             title = chat_obj.title if chat_obj else "Chat"
         except Exception:
+            chat_obj = None
             title = "Chat"
         preview = content[:300] if content else ""
         ws_name = workspace.rstrip("/").rsplit("/", 1)[-1] if workspace else ""
+        is_bridge = bool((chat_obj.meta or {}).get("bridge_bot_id")) if chat_obj else False
         try:
             await clear_active_tasks(chat_id, user_id, message_id)
         except Exception:
@@ -1457,6 +1459,7 @@ async def run_chat_task(
             content=preview,
             workspace=workspace,
             workspace_name=ws_name,
+            bridge=is_bridge,
         )
 
     event_workspace = (
