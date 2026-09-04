@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from cptr.utils.config import check_access
 from cptr.utils.identity import IdentityUnavailable, identity_for_request
-from cptr.utils.terminal import TerminalUnavailable, manager, IS_WINDOWS
+from cptr.utils.terminal import TerminalUnavailable, manager
 from cptr.utils.tools import (
     command_session_bytes_since,
     drain_command_session_input,
@@ -246,68 +246,35 @@ async def terminal_ws(websocket: WebSocket, session_id: str):
     MSG_INPUT = 0
     MSG_RESIZE = 2
 
-    async def read_pty():
-        """Read from PTY and send to WebSocket.
+    async def stream_output():
+        """Tail the session's output buffer and forward to WebSocket.
 
-        Event-driven via add_reader. Wakes instantly when the PTY has
-        output (0 ms latency vs 5 ms poll-sleep).  Batch-reads all
-        available data into a single WebSocket frame to minimise framing
-        overhead.
+        The PTY itself is drained by a session-owned task (started in
+        SessionManager.create), so this task only forwards buffered output.
+        A client that disconnects never interrupts the child process: on
+        reconnect the client resumes from its byte offset in the buffer.
         """
+        offset = session._total_bytes - len(session._output)
+        if scrollback:
+            # Skip what was already sent in the scrollback replay above.
+            offset = session._total_bytes
         try:
-            if IS_WINDOWS:
-                # Windows ProactorEventLoop doesn't support add_reader;
-                # pywinpty read() blocks, so run it outside the event loop.
-                while True:
-                    if not session.is_alive():
-                        logger.info(f"Session {session_id} died, stopping read")
-                        break
-                    try:
-                        data = await asyncio.to_thread(session.read, 16384)
-                        if data:
-                            await websocket.send_bytes(data)
-                    except EOFError:
-                        logger.info(f"Session {session_id} reached EOF")
-                        break
-                    except (OSError, IOError) as e:
-                        logger.error(f"PTY read error for {session_id}: {e}")
-                        break
-            else:
-                # Unix: event-driven, zero-latency
-                loop = asyncio.get_running_loop()
-                readable = asyncio.Event()
-                loop.add_reader(session._fd, readable.set)
-                try:
-                    while True:
-                        await readable.wait()
-                        readable.clear()
-
-                        # Batch-read all available data (up to 64 KB)
-                        chunks: list[bytes] = []
-                        total = 0
-                        while total < 65536:
-                            data = session.read(16384)
-                            if not data:
-                                break
-                            chunks.append(data)
-                            total += len(data)
-
-                        if chunks:
-                            await websocket.send_bytes(b"".join(chunks))
-                        elif not session.is_alive():
-                            logger.info(f"Session {session_id} died, stopping read")
-                            break
-                finally:
-                    try:
-                        loop.remove_reader(session._fd)
-                    except Exception:
-                        pass
+            while True:
+                data, offset = session.bytes_since(offset)
+                if data:
+                    await websocket.send_bytes(data)
+                if session._done:
+                    break
+                async with session._output_condition:
+                    await session._output_condition.wait_for(
+                        lambda: session._done or session._total_bytes != offset
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"read_pty unexpected error for {session_id}: {e}")
+            logger.error(f"stream_output error for {session_id}: {e}")
 
-    read_task = asyncio.create_task(read_pty())
+    stream_task = asyncio.create_task(stream_output())
 
     try:
         while True:
@@ -342,8 +309,9 @@ async def terminal_ws(websocket: WebSocket, session_id: str):
     except Exception as e:
         logger.error(f"WebSocket error for {session_id}: {e}")
     finally:
-        read_task.cancel()
+        stream_task.cancel()
         try:
-            await read_task
+            await stream_task
         except asyncio.CancelledError:
             pass
+        # Drain task keeps running: output continues to buffer while detached.

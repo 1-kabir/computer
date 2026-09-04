@@ -6,6 +6,7 @@ Uses pywinpty on Windows (optional dependency, installed only on Windows).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 import shlex
@@ -17,6 +18,7 @@ from typing import Dict, List, Optional
 from cptr.utils.identity import ExecutionIdentity, env_for, expand_user_path, preexec_for
 
 SCROLLBACK_SIZE = 64 * 1024  # 64 KB
+OUTPUT_CAP = 256 * 1024  # in-memory output buffer cap for reattach tailing
 IS_WINDOWS = platform.system() == "Windows"
 
 
@@ -26,7 +28,14 @@ class TerminalUnavailable(RuntimeError):
 
 @dataclass
 class TerminalSession:
-    """Platform-agnostic terminal session with scrollback buffer."""
+    """Platform-agnostic terminal session with a session-owned output drain.
+
+    Output is always drained into an in-memory buffer by a per-session task,
+    independent of any connected WebSocket client. Clients (terminal_ws)
+    subscribe by tailing the buffer with a byte offset, so shell sessions and
+    the TUIs running inside them keep running (and producing output) while no
+    browser is attached. Buffer keeps the last OUTPUT_CAP bytes.
+    """
 
     session_id: str
     cwd: str
@@ -35,6 +44,13 @@ class TerminalSession:
     rows: int = 24
     cols: int = 80
     _scrollback: bytearray = field(default_factory=bytearray, repr=False)
+
+    # Persistent output buffer + byte counter for detached draining.
+    _output: bytearray = field(default_factory=bytearray, repr=False)
+    _total_bytes: int = 0
+    _output_condition: asyncio.Condition = field(default_factory=asyncio.Condition, repr=False)
+    _drain_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    _done: bool = False
 
     # Platform handles
     _fd: int = -1  # Unix: master pty fd
@@ -69,6 +85,88 @@ class TerminalSession:
     def get_scrollback(self) -> bytes:
         return bytes(self._scrollback)
 
+    # ── Detached output draining ─────────────────────────────
+
+    def _append_output(self, data: bytes) -> None:
+        if not data:
+            return
+        self._output.extend(data)
+        self._total_bytes += len(data)
+        if len(self._output) > OUTPUT_CAP * 2:
+            self._output = self._output[-OUTPUT_CAP:]
+
+    def bytes_since(self, offset: int) -> tuple[bytes, int]:
+        """Return (output bytes after offset, new offset). Empty when caught up."""
+        total = self._total_bytes
+        if offset >= total:
+            return b"", total
+        start_in_buf = total - len(self._output)
+        start = max(0, offset - start_in_buf)
+        return bytes(self._output[start:]), total
+
+    async def _notify_output(self) -> None:
+        async with self._output_condition:
+            self._output_condition.notify_all()
+
+    def start_drain(self) -> None:
+        """Start the session-owned PTY drain task (idempotent).
+
+        Must be called from a running event loop (router endpoints are async).
+        The task keeps reading the PTY regardless of WebSocket attachments so
+        child processes never block on a full pty buffer while detached.
+        """
+        if self._drain_task is not None and not self._drain_task.done():
+            return
+        if IS_WINDOWS:
+            self._drain_task = asyncio.create_task(self._drain_windows())
+        else:
+            self._drain_task = asyncio.create_task(self._drain_unix())
+
+    async def _drain_unix(self) -> None:
+        loop = asyncio.get_running_loop()
+        readable = asyncio.Event()
+        loop.add_reader(self._fd, readable.set)
+        try:
+            while True:
+                await readable.wait()
+                readable.clear()
+                data = self.read(65536)
+                if data:
+                    self._append_output(data)
+                    await self._notify_output()
+                elif not self.is_alive():
+                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            import logging
+
+            logging.getLogger("cptr.terminal").error(f"drain task error for {self.session_id}: {e}")
+        finally:
+            try:
+                loop.remove_reader(self._fd)
+            except Exception:
+                pass
+            self._done = True
+            await self._notify_output()
+
+    async def _drain_windows(self) -> None:
+        # pywinpty read() blocks; run it outside the event loop.
+        while True:
+            if not self.is_alive():
+                break
+            try:
+                data = await asyncio.to_thread(self._process.read, 16384)  # type: ignore
+                if isinstance(data, str):
+                    data = data.encode("utf-8", errors="replace")
+            except (EOFError, OSError, IOError):
+                break
+            if data:
+                self._append_output(data)
+                await self._notify_output()
+        self._done = True
+        await self._notify_output()
+
     def resize(self, rows: int, cols: int) -> None:
         self.rows = rows
         self.cols = cols
@@ -94,6 +192,8 @@ class TerminalSession:
             return False
 
     def close(self) -> None:
+        if self._drain_task is not None and not self._drain_task.done():
+            self._drain_task.cancel()
         if IS_WINDOWS:
             try:
                 self._process.close()  # type: ignore
@@ -310,6 +410,9 @@ class SessionManager:
         else:
             session = _create_unix(session_id, identity, shell, work_dir, env, rows, cols)
 
+        # Drain output session-side so detached clients (closed tab, sleeping
+        # laptop) never stall the child process on a full pty buffer.
+        session.start_drain()
         self._sessions[session_id] = session
         return session
 

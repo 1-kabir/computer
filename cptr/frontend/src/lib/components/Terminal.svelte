@@ -93,10 +93,16 @@
 		wakeLock = null;
 	}
 
-	// Re-acquire wake lock when tab becomes visible again
+	// Re-acquire wake lock when tab becomes visible again, and restore the
+	// WebSocket if it died while the tab was hidden (browsers throttle or
+	// suspend background tabs, which can silently kill the connection).
 	function handleVisibilityChange() {
 		if (document.visibilityState === 'visible' && !destroyed) {
 			acquireWakeLock();
+			if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+				if (reconnectTimer) clearTimeout(reconnectTimer);
+				connectWebSocket();
+			}
 		}
 	}
 
