@@ -2078,7 +2078,9 @@ async def run_chat_task(
                 if name == "create_artifact":
                     args = dict(arguments)
                     args.pop("workspace", None)
-                    result = await create_artifact(**args, workspace=workspace)
+                    result = await create_artifact(
+                        **args, __context__={**tool_ctx, "call_id": item["call_id"]}
+                    )
                 else:
                     result = await execute_tool(
                         name,
@@ -2632,7 +2634,9 @@ async def run_chat_task(
                     if tc["name"] == "create_artifact":
                         args = dict(tc["arguments"])
                         args.pop("workspace", None)
-                        result = await create_artifact(**args, workspace=workspace)
+                        result = await create_artifact(
+                            **args, __context__={**tool_ctx, "call_id": tc["call_id"]}
+                        )
                     else:
                         result = await execute_tool(
                             tc["name"],
