@@ -88,7 +88,11 @@ async def start_async_subagent(
 ) -> None:
     """Start a reserved subagent runner and return immediately."""
 
+    parent_chat_id = None
+    user_id = None
+
     async def _run() -> None:
+        nonlocal parent_chat_id, user_id
         status = "completed"
         summary = ""
         error = None
@@ -104,12 +108,17 @@ async def start_async_subagent(
             error = f"{type(exc).__name__}: {exc}"
         finally:
             await _finalize(delegation_id, status=status, summary=summary, error=error)
+            await emit_subagents_update(parent_chat_id, user_id)
 
     task = asyncio.create_task(_run())
     async with _lock:
         record = _records.get(delegation_id)
         if record:
             record["task"] = task
+            parent_chat_id = record.get("parent_chat_id")
+            user_id = record.get("user_id")
+
+    await emit_subagents_update(parent_chat_id, user_id)
 
 
 async def fail_reserved_subagent(delegation_id: str, error: str) -> None:
@@ -134,12 +143,47 @@ async def cancel_all_async_subagents(reason: str = "shutdown") -> int:
     return count
 
 
-def list_async_subagents() -> list[dict[str, Any]]:
-    """Return a serializable snapshot of records."""
+async def cancel_async_subagent(delegation_id: str, reason: str = "user request") -> bool:
+    """Cancel a single running background subagent. Returns True if cancelled."""
+    async with _lock:
+        record = _records.get(delegation_id)
+        task = record.get("task") if record else None
+        if not record or record.get("status") not in {"starting", "running"}:
+            return False
+    if task and not task.done():
+        task.cancel()
+        logger.info("Cancelled async subagent %s (%s)", delegation_id, reason)
+        return True
+    return False
+
+
+def list_async_subagents(parent_chat_id: str | None = None) -> list[dict[str, Any]]:
+    """Return a serializable snapshot of records, optionally scoped to one parent chat."""
     snapshot = []
     for record in _records.values():
+        if parent_chat_id and record.get("parent_chat_id") != parent_chat_id:
+            continue
         snapshot.append({k: v for k, v in record.items() if k != "task"})
     return snapshot
+
+
+async def emit_subagents_update(parent_chat_id: str | None, user_id: str | None) -> None:
+    """Push the current subagent snapshot for a parent chat to the user's clients."""
+    if not parent_chat_id or not user_id:
+        return
+    from cptr.socket.main import emit_to_user
+
+    try:
+        await emit_to_user(
+            user_id,
+            {
+                "type": "chat:subagents",
+                "chat_id": parent_chat_id,
+                "subagents": list_async_subagents(parent_chat_id),
+            },
+        )
+    except Exception:
+        logger.exception("Failed to emit subagent update for chat %s", parent_chat_id)
 
 
 async def _finalize(
