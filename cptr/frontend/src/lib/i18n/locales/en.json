@@ -63,6 +63,7 @@
 	"browser.starting": "Starting Browser…",
 	"browser.connectionLost": "Browser connection lost",
 	"bar.closeTab": "Close tab",
+	"bar.renameTab": "Rename tab",
 	"bar.new": "New...",
 	"bar.sidebar": "Sidebar",
 	"bar.toggleSidebar": "Toggle sidebar",

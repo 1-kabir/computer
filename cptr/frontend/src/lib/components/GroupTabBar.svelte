@@ -16,6 +16,7 @@
 		splitActive,
 		splitCurrentTab,
 		setSplitDirection,
+		updateTabLabel,
 		sidebarOpen,
 		type EditorGroup,
 		type Tab
@@ -40,6 +41,7 @@
 		onTabDragOver?: () => void;
 		onHomeSelect?: (tabId: string) => void;
 		onHomeClose?: (tabId: string) => void;
+		onHomeRename?: (tabId: string, label: string) => void;
 		onHomeReorder?: (oldIndex: number, newIndex: number) => void;
 		onHomeMove?: (tabId: string, fromGroupId: string) => void;
 		onHomeNewChat?: () => void;
@@ -60,6 +62,7 @@
 		onTabDragOver,
 		onHomeSelect,
 		onHomeClose,
+		onHomeRename,
 		onHomeReorder,
 		onHomeMove,
 		onHomeNewChat,
@@ -127,6 +130,13 @@
 		e.stopPropagation();
 		if (home) return onHomeClose?.(tabId);
 		closeTab(tabId, group.id);
+	}
+
+	function renameTab(tab: Tab) {
+		const label = window.prompt($t('bar.renameTab'), tab.label)?.trim();
+		if (!label || label === tab.label) return;
+		if (home) return onHomeRename?.(tab.id, label);
+		updateTabLabel(tab.id, label);
 	}
 
 	function handleCloseGroup(e: Event) {
@@ -299,6 +309,11 @@
 
 		if (!tab.permanent) {
 			if (items.length > 0) items.push({ label: '', onclick: () => {}, divider: true });
+			items.push({
+				label: $t('bar.renameTab'),
+				icon: 'pencil',
+				onclick: () => renameTab(tab)
+			});
 			items.push({
 				label: $t('bar.closeTab'),
 				icon: 'xmark',
