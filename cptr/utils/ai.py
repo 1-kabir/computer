@@ -28,9 +28,37 @@ from cptr.env import (
     STREAM_READ_TIMEOUT_SECONDS,
     STREAM_WRITE_TIMEOUT_SECONDS,
 )
+from cptr.utils.json_parser import extract_json
 from cptr.utils.logger import log_upstream_request
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_tool_arguments(raw: str, tool_name: str) -> dict:
+    """Parse streamed tool-call arguments, tolerating provider quirks.
+
+    Providers occasionally stream empty or truncated argument JSON (e.g. when
+    output is cut off by token limits or an upstream hiccup). Try strict
+    parsing first, then fall back to the lenient extractor before giving up
+    with a descriptive error.
+
+    Raises RuntimeError with the tool name and a payload snippet when the
+    arguments cannot be recovered.
+    """
+    if raw is None or not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    recovered = extract_json(raw)
+    if isinstance(recovered, dict):
+        return recovered
+    snippet = raw.strip().replace("\n", " ")[:120]
+    raise RuntimeError(
+        f"Tool call '{tool_name}' returned unparseable arguments "
+        f"(invalid JSON from the provider): {snippet!r}"
+    )
 
 
 def _reasoning_output_item(text: str = "", *, status: str = "in_progress") -> dict:
@@ -406,12 +434,25 @@ def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
                 else:
                     blocks.append({"type": "text", "text": content})
             for tc in m["tool_calls"]:
+                # History replay: a stale/corrupt argument payload from a past
+                # turn must not break the current request — degrade to {}.
+                try:
+                    tc_input = _parse_tool_arguments(
+                        tc["function"].get("arguments", "{}"),
+                        tc["function"].get("name", "?"),
+                    )
+                except RuntimeError:
+                    logger.warning(
+                        "[anthropic] Dropping unparseable arguments for historical tool call %s",
+                        tc["function"].get("name", "?"),
+                    )
+                    tc_input = {}
                 blocks.append(
                     {
                         "type": "tool_use",
                         "id": tc.get("id", ""),
                         "name": tc["function"]["name"],
-                        "input": json.loads(tc["function"].get("arguments", "{}")),
+                        "input": tc_input,
                     }
                 )
             result.append({"role": "assistant", "content": blocks})
@@ -505,7 +546,9 @@ async def stream_anthropic(
                                     "type": "tool_call",
                                     "call_id": current_block["id"],
                                     "name": current_block["name"],
-                                    "arguments": json.loads(current_block["input_json"]),
+                                    "arguments": _parse_tool_arguments(
+                                        current_block["input_json"], current_block["name"]
+                                    ),
                                 }
 
                         elif etype == "message_delta":
@@ -775,7 +818,9 @@ async def stream_openai_completions(
                                     "type": "tool_call",
                                     "call_id": tc["id"],
                                     "name": tc["name"],
-                                    "arguments": json.loads(tc["arguments_json"]),
+                                    "arguments": _parse_tool_arguments(
+                                        tc["arguments_json"], tc["name"]
+                                    ),
                                 }
 
                         if chunk.get("usage"):
@@ -1101,7 +1146,9 @@ async def stream_openai_responses(
                                     "id": item.get("id", ""),
                                     "call_id": item["call_id"],
                                     "name": item["name"],
-                                    "arguments": json.loads(item["arguments"]),
+                                    "arguments": _parse_tool_arguments(
+                                        item["arguments"], item["name"]
+                                    ),
                                 }
                             elif item["type"] == "reasoning":
                                 # Reasoning items must be round-tripped for reasoning models
