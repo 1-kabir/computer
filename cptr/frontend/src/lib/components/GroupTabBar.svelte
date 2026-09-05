@@ -22,6 +22,8 @@
 		type Tab
 	} from '$lib/stores';
 	import { openChatTab } from '$lib/stores';
+	import { updateChatTitle } from '$lib/apis/chat';
+	import { toast } from 'svelte-sonner';
 	import {
 		chatEnabled,
 		chatStatuses,
@@ -138,10 +140,21 @@
 		closeTab(tabId, group.id);
 	}
 
-	function renameTab(tab: Tab) {
+	async function renameTab(tab: Tab) {
 		const label = window.prompt($t('bar.renameTab'), tab.label)?.trim();
 		if (!label || label === tab.label) return;
 		if (home) return onHomeRename?.(tab.id, label);
+		// Chat tabs must rename the chat itself, not just the local tab label,
+		// otherwise the next chat load overwrites the label with the DB title
+		// and the sidebar never learns about the change.
+		if (tab.type === 'chat' && tab.path && !tab.path.startsWith('new-') && !tab.path.startsWith('pending-')) {
+			try {
+				await updateChatTitle(tab.path, label);
+			} catch (e) {
+				toast.error(e instanceof Error ? e.message : 'Rename failed');
+				return;
+			}
+		}
 		updateTabLabel(tab.id, label);
 	}
 
