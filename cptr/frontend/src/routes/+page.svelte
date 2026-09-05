@@ -186,6 +186,19 @@
 		if (!tabs.length) closeHomeGroup(groupId);
 	}
 
+	function renameHomeTab(tabId: string, label: string, groupId = $homeState.activeGroupId) {
+		const group = $homeState.groups.find((item) => item.id === groupId);
+		if (!group) return;
+		const tab = group.tabs.find((item) => item.id === tabId);
+		if (!tab || tab.permanent) return;
+		const value = label.trim().slice(0, 120);
+		if (!value) return;
+		updateHomeTabs(groupId, (tabs) => ({
+			tabs: tabs.map((item) => (item.id === tabId ? { ...item, label: value } : item)),
+			activeTabId: group.activeTabId
+		}));
+	}
+
 	function updateHomeChatTab(
 		tabId: string,
 		chatId: string,
@@ -1020,6 +1033,7 @@
 				onHomeSelect={(tabId) =>
 					updateHomeTabs(homePane.id, (tabs) => ({ tabs, activeTabId: tabId }))}
 				onHomeClose={(tabId) => closeHomeTab(tabId, homePane.id)}
+				onHomeRename={(tabId, label) => renameHomeTab(tabId, label, homePane.id)}
 				onHomeReorder={(oldIndex, newIndex) => reorderHomeTabs(homePane.id, oldIndex, newIndex)}
 				onHomeMove={(tabId, fromGroupId) => moveHomeTabToGroup(tabId, fromGroupId, homePane.id)}
 				onHomeNewChat={() => openHomeChat(undefined, homePane.id)}
