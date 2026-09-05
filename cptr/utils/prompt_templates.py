@@ -306,18 +306,23 @@ async def load_system_prompt(
     current_message: str = "",
     recent_messages: list[dict] | None = None,
     mentioned_files: list[str] | None = None,
+    base_template_override: str | None = None,
 ) -> str:
     """Load and render the system prompt for a workspace/model.
 
-    Resolution order:
+    Resolution order (unless base_template_override is provided):
       1. .cptr/system.md in the workspace
       2. Per-model system_prompt from chat.models config
       3. Global (*) system_prompt from chat.models config
       4. DEFAULT_SYSTEM_PROMPT
-    """
-    template = None
 
-    if workspace:
+    base_template_override replaces only the base template (steps 1-4); all
+    augmentation (memory, instruction files, skills, runtime context) still
+    applies on top, unchanged.
+    """
+    template = base_template_override if base_template_override else None
+
+    if template is None and workspace:
         ws_prompt = Path(workspace) / ".cptr" / "system.md"
         if user_id:
             try:

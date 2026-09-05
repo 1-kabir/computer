@@ -1418,6 +1418,19 @@ async def run_chat_task(
                 "[task %s] internal request creation failed", message_id[:8], exc_info=True
             )
 
+    # Messaging-gateway chats may use a dedicated base system prompt. Only the
+    # base template is swapped; memory, instruction files, skills, and runtime
+    # context are injected afterwards exactly as for normal chats.
+    gateway_system_prompt: str | None = None
+    try:
+        chat_obj = await Chat.get_by_id(chat_id)
+        if chat_obj and (chat_obj.meta or {}).get("bridge_bot_id"):
+            configured = await Config.get("gateway.system_prompt")
+            if isinstance(configured, str) and configured.strip():
+                gateway_system_prompt = configured
+    except Exception:
+        logger.debug("[task %s] gateway system prompt lookup failed", message_id[:8], exc_info=True)
+
     async def emit(**data):
         """Stream an output delta to the user."""
         try:
@@ -1593,6 +1606,7 @@ async def run_chat_task(
             current_message=memory_message,
             recent_messages=messages,
             mentioned_files=memory_files,
+            base_template_override=gateway_system_prompt,
         )
         if loaded_summary:
             system += f"\n\n[CONVERSATION SUMMARY]\n{loaded_summary}"
@@ -1911,6 +1925,7 @@ async def run_chat_task(
             current_message=memory_message,
             recent_messages=messages,
             mentioned_files=memory_files,
+            base_template_override=gateway_system_prompt,
         )
         if loaded_summary:
             system += f"\n\n[CONVERSATION SUMMARY]\n{loaded_summary}"
@@ -2199,6 +2214,7 @@ async def run_chat_task(
                     current_message=memory_message,
                     recent_messages=keep_zone,
                     mentioned_files=memory_files,
+                    base_template_override=gateway_system_prompt,
                 )
                 system += f"\n\n[CONVERSATION SUMMARY]\n{summary}"
                 # Re-inject attached skills after compaction (protect from pruning)

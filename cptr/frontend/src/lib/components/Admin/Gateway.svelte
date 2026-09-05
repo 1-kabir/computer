@@ -26,6 +26,7 @@
 	let saving = $state(false);
 	let newKeyName = $state('');
 	let selectedModel = $state('');
+	let systemPrompt = $state('');
 
 	/** Newly created key, shown once, then hidden */
 	let revealedKey = $state('');
@@ -54,6 +55,10 @@
 				typeof gatewayConfig.config['gateway.model'] === 'string'
 					? gatewayConfig.config['gateway.model']
 					: '';
+			systemPrompt =
+				typeof gatewayConfig.config['gateway.system_prompt'] === 'string'
+					? (gatewayConfig.config['gateway.system_prompt'] as string)
+					: '';
 		} catch {
 			toast.error($t('admin.gateway.loadError'));
 		} finally {
@@ -64,7 +69,7 @@
 	async function save() {
 		saving = true;
 		try {
-			await updateConfig({ 'gateway.model': selectedModel });
+			await updateConfig({ 'gateway.model': selectedModel, 'gateway.system_prompt': systemPrompt });
 			toast.success($t('settings.saved'));
 		} catch {
 			toast.error($t('admin.gateway.modelSaveError'));
@@ -158,6 +163,21 @@
 			</div>
 			<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mt-1.5">
 				{$t('admin.gateway.modelDescription')}
+			</p>
+		</div>
+
+		<div class="mb-5 border-b border-gray-100 dark:border-white/5 pb-4">
+			<h3 class="text-xs text-gray-400 dark:text-gray-600 mb-2">
+				{$t('admin.gateway.systemPrompt')}
+			</h3>
+			<textarea
+				class="w-full min-h-24 px-2 py-1.5 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-gray-400 dark:focus:border-white/20 transition-colors resize-y font-mono"
+				bind:value={systemPrompt}
+				placeholder={$t('admin.gateway.systemPromptPlaceholder')}
+				disabled={saving}
+			></textarea>
+			<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mt-1.5">
+				{$t('admin.gateway.systemPromptDescription')}
 			</p>
 		</div>
 
