@@ -64,6 +64,11 @@ class BaseAdapter(ABC):
 
     platform: str = "unknown"
 
+    # Whether the platform supports editing sent messages in place.  Adapters
+    # on send-only platforms (e.g. WhatsApp) must set this to False; the
+    # bridge then delivers replies via send() instead of edit().
+    supports_edit: bool = True
+
     # Set by BotManager when the adapter is started.
     on_message: Optional[Callable[[MessageEvent], Awaitable[None]]] = None
 
@@ -813,10 +818,12 @@ class BotManager:
         request = await internal_request_for_user(self.app, bot["user_id"])
         await export_chat_to_file(request, chat_id)
 
-        # Send initial "thinking" message for non-draft platforms (Discord)
-        # Telegram uses sendMessageDraft which handles this natively
+        # Send initial "thinking" message for non-draft platforms (Discord).
+        # Telegram uses sendMessageDraft which handles this natively.  Skip on
+        # send-only platforms (WhatsApp): the placeholder could never be edited
+        # in place, so it would just be noise.
         platform_msg_id = None
-        if adapter and bot["platform"] != "telegram":
+        if adapter and bot["platform"] != "telegram" and adapter.supports_edit:
             try:
                 platform_msg_id = await adapter.send(event.chat_id, "⏳ Thinking...")
             except Exception:
@@ -859,6 +866,9 @@ class BotManager:
         sendMessage to persist the final response (drafts are ephemeral).
 
         Discord: uses edit-based streaming (PATCH /messages).
+
+        Send-only platforms (WhatsApp): no placeholder, no streaming edits —
+        just a typing indicator while working, then the final reply via send().
         """
         from cptr.utils.chat_task import _task_state, _tasks
 
@@ -868,6 +878,8 @@ class BotManager:
         max_len = 32_768 if bot["platform"] == "telegram" else 2000
         last_sent = ""
         is_telegram = bot["platform"] == "telegram"
+        # Send-only platform: never edit, never send a placeholder.
+        use_send_only = not adapter.supports_edit
 
         # Telegram: use draft-based streaming
         draft_id: int | None = None
@@ -886,7 +898,7 @@ class BotManager:
                 logger.debug("[bridge] Draft not supported, falling back to edit", exc_info=True)
 
         # Fallback: if draft failed or non-Telegram, ensure we have a message to edit
-        if not use_draft and not platform_msg_id:
+        if not use_draft and not use_send_only and not platform_msg_id:
             try:
                 platform_msg_id = await adapter.send(platform_chat_id, "⏳ Thinking...")
             except Exception:
@@ -912,7 +924,13 @@ class BotManager:
 
                 display = "\n\n".join(display_parts).strip()
 
-                if display and display != last_sent:
+                if use_send_only:
+                    # Send-only platform: no in-place streaming.  The typing
+                    # indicator below refreshes every poll (WhatsApp's
+                    # indicator auto-dismisses after 25s, so re-sending is
+                    # correct behavior, not spam).
+                    pass
+                elif display and display != last_sent:
                     display = display[:max_len]
 
                     if use_draft:
@@ -929,7 +947,10 @@ class BotManager:
                         except Exception:
                             pass
 
-                elif not display and not last_sent:
+                elif not display and not last_sent or use_send_only:
+                    # Typing indicator while nothing visible yet — and on
+                    # send-only platforms, continuously (the WhatsApp
+                    # indicator auto-dismisses after 25s, so refresh it).
                     if not use_draft:
                         try:
                             await adapter.send_typing(platform_chat_id)
@@ -949,18 +970,26 @@ class BotManager:
             final_content = (msg.content if msg else content).strip()
 
             if not final_content:
-                if use_draft:
-                    await adapter.send(platform_chat_id, "✅ Done (no text output)")
+                if use_draft or use_send_only:
+                    try:
+                        await adapter.send(platform_chat_id, "✅ Done (no text output)")
+                    except Exception:
+                        logger.exception("[bridge] Failed to send completion notice")
                 elif platform_msg_id:
-                    await adapter.edit(
-                        platform_chat_id, platform_msg_id, "✅ Done (no text output)"
-                    )
+                    try:
+                        await adapter.edit(
+                            platform_chat_id, platform_msg_id, "✅ Done (no text output)"
+                        )
+                    except Exception:
+                        logger.exception("[bridge] Final edit failed")
                 return
 
             final_display = final_content
 
-            if use_draft:
-                # Draft is ephemeral — must send a real message to persist
+            if use_draft or use_send_only:
+                # Draft is ephemeral — must send a real message to persist.
+                # Send-only platforms (WhatsApp) have no placeholder to edit:
+                # the final reply is delivered via send() in chunks.
                 chunks = chunk_message(final_display, max_len)
                 for chunk in chunks:
                     try:
@@ -974,7 +1003,14 @@ class BotManager:
                         await adapter.edit(platform_chat_id, platform_msg_id, final_display)
                         return
                     except Exception:
-                        logger.debug("[bridge] Final edit failed", exc_info=True)
+                        logger.exception("[bridge] Final edit failed — falling back to send()")
+                        # Do not drop the reply: deliver via send() instead.
+                        chunks = chunk_message(final_display, max_len)
+                        for chunk in chunks:
+                            try:
+                                await adapter.send(platform_chat_id, chunk)
+                            except Exception:
+                                logger.exception("[bridge] Failed to send final chunk")
                         return
 
                 chunks = chunk_message(final_display, max_len)
@@ -983,14 +1019,13 @@ class BotManager:
                         await adapter.edit(platform_chat_id, platform_msg_id, chunks[0])
                         chunks = chunks[1:]
                     except Exception:
-                        logger.debug("[bridge] Final chunk edit failed", exc_info=True)
-                        return
+                        logger.exception("[bridge] Final chunk edit failed — sending all chunks")
                 for chunk in chunks:
                     try:
                         await adapter.send(platform_chat_id, chunk)
                     except Exception:
+                        # A lost chunk must be visible in logs, not silent.
                         logger.exception("[bridge] Failed to send reply chunk")
-                    break
 
         except asyncio.CancelledError:
             pass
