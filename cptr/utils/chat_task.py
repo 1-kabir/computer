@@ -1488,6 +1488,7 @@ async def run_chat_task(
             summary_message_id = parent_msg.id
     content = (msg.content or "") if msg else ""
     output_items: list[dict] = list(msg.output or []) if msg else []
+    message_meta: dict = dict(msg.meta or {}) if msg else {}
     text_buffer = ""  # Accumulates text between tool calls
     task_completed_success = False
     review_messages: list[dict] = []
@@ -2393,6 +2394,17 @@ async def run_chat_task(
                             )
                         )
 
+                elif event["type"] == "truncated" and "truncated" not in message_meta:
+                    # Provider ended the stream early (output cap or dropped
+                    # connection). Record it on the message so the UI can offer
+                    # a Continue affordance; the reply itself is still saved.
+                    logger.warning(
+                        "[task %s] provider stream ended early (reason=%s); marking message truncated",
+                        message_id[:8],
+                        event.get("reason"),
+                    )
+                    message_meta["truncated"] = {"reason": event.get("reason") or "stream_end"}
+
                 elif event["type"] == "done":
                     # Stream ended. Usage may have arrived earlier, multiple times, or never.
                     if not pending_calls:
@@ -2419,6 +2431,7 @@ async def run_chat_task(
                             output=output_items,
                             usage=last_usage,
                             done=True,
+                            **({"meta": message_meta} if message_meta else {}),
                         )
                         _task_state.pop(message_id, None)
                         await _emit_done()

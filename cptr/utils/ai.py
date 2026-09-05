@@ -745,17 +745,22 @@ async def stream_openai_completions(
                         reasoning_details = []
                         return item
 
+                    saw_done_sentinel = False
+                    finish_reason: str | None = None
                     async for line in resp.aiter_lines():
                         if not line.startswith("data:"):
                             continue
                         raw = line.removeprefix("data:").strip()
                         if raw == "[DONE]":
+                            saw_done_sentinel = True
                             break
                         if not raw:
                             continue
                         chunk = json.loads(raw)
                         choices = chunk.get("choices", [])
                         delta = choices[0].get("delta", {}) if choices else {}
+                        if choices and choices[0].get("finish_reason"):
+                            finish_reason = choices[0]["finish_reason"]
 
                         reasoning_delta = (
                             delta.get("reasoning_content")
@@ -855,6 +860,19 @@ async def stream_openai_completions(
                             "Upstream provider returned an empty completion with no text, "
                             "output items, tool calls, or usage tokens."
                         )
+                    # Truncation detection: a healthy text response ends with
+                    # finish_reason "stop" (or "tool_calls" handled above) and the
+                    # [DONE] sentinel. Anything else means the provider ended the
+                    # stream early — surface that instead of silently saving a
+                    # half-finished reply.
+                    truncated_reason: str | None = None
+                    if finish_reason == "length":
+                        truncated_reason = "length"
+                    elif finish_reason is None and not saw_done_sentinel:
+                        truncated_reason = "stream_end"
+                    if truncated_reason:
+                        emitted = True
+                        yield {"type": "truncated", "reason": truncated_reason}
                     emitted = True
                     yield {"type": "done"}
             return
