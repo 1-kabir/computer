@@ -222,6 +222,35 @@ def _prune_completed_locked() -> None:
         _records.pop(rid, None)
 
 
+def _resolve_injection_parent_id(chat: Chat, all_msgs: list, record: dict[str, Any]) -> str | None:
+    """Pick the message the completion notice should attach to.
+
+    The notice must land on the branch the user is actually looking at, which
+    is the chat's current_message_id — not "the newest done assistant", which
+    can be a sibling of an in-flight task and cause the injection (and the
+    follow-up task's branch pointer move) to sideline the live conversation.
+
+    Resolution order:
+    1. chat.current_message_id when it exists among the chat's messages
+       (attach as a child of the leaf, whatever its role — parenting under an
+       in-flight assistant makes the notice a pending input on the user's
+       branch, which the pending-input machinery processes when the task
+       finishes).
+    2. The newest done assistant (legacy behavior) when the pointer is stale
+       or missing.
+    3. The original parent message the subagent was dispatched from, for
+       chats whose history was otherwise unavailable.
+    """
+    msg_map = {m.id: m for m in all_msgs}
+    leaf_id = (chat.current_message_id or "").strip() or None
+    if leaf_id and leaf_id in msg_map:
+        return leaf_id
+    done_assistants = [m for m in all_msgs if m.role == "assistant" and m.done]
+    if done_assistants:
+        return done_assistants[-1].id
+    return record.get("parent_message_id")
+
+
 async def _inject_completion(record: dict[str, Any]) -> None:
     parent_chat_id = record.get("parent_chat_id")
     user_id = record.get("user_id")
@@ -242,8 +271,7 @@ async def _inject_completion(record: dict[str, Any]) -> None:
     async with get_pending_input_lock(parent_chat_id):
         all_msgs = await ChatMessage.get_all_by_chat(parent_chat_id)
         active = any(m.role == "assistant" and not m.done for m in all_msgs)
-        done_assistants = [m for m in all_msgs if m.role == "assistant" and m.done]
-        parent_id = done_assistants[-1].id if done_assistants else record.get("parent_message_id")
+        parent_id = _resolve_injection_parent_id(chat, all_msgs, record)
 
         meta = {
             "internal": True,
