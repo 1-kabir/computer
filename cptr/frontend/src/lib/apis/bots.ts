@@ -23,6 +23,10 @@ export type BotForm = {
 	token: string;
 	allowed_senders?: string[];
 	is_active?: boolean;
+	/** WhatsApp only: enables webhook signature verification. */
+	app_secret?: string;
+	/** WhatsApp only: string Meta echoes during the GET verification challenge. */
+	webhook_verify_token?: string;
 };
 
 export type BotUpdate = {
@@ -32,6 +36,10 @@ export type BotUpdate = {
 	token?: string;
 	allowed_senders?: string[];
 	is_active?: boolean;
+	/** WhatsApp only: enables webhook signature verification. */
+	app_secret?: string;
+	/** WhatsApp only: string Meta echoes during the GET verification challenge. */
+	webhook_verify_token?: string;
 };
 
 export async function listBots(): Promise<BotData[]> {

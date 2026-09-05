@@ -26,6 +26,8 @@
 	let platform = $state(bot?.platform || 'telegram');
 	let name = $state(bot?.name || '');
 	let token = $state('');
+	let appSecret = $state('');
+	let webhookVerifyToken = $state('');
 	let modelId = $state(bot?.model_id || $defaultModel || '');
 	let workspace = $state(bot?.workspace || '');
 	let allowedSenders = $state(bot?.allowed_senders?.join(', ') || '');
@@ -102,6 +104,10 @@
 							.filter(Boolean) || undefined
 				};
 				if (token.trim()) update.token = token.trim();
+				if (platform === 'whatsapp') {
+					if (appSecret.trim()) update.app_secret = appSecret.trim();
+					if (webhookVerifyToken.trim()) update.webhook_verify_token = webhookVerifyToken.trim();
+				}
 				await updateBot(bot.id, update);
 			} else {
 				await createBot({
@@ -114,7 +120,11 @@
 						allowedSenders
 							.split(',')
 							.map((s) => s.trim())
-							.filter(Boolean) || undefined
+							.filter(Boolean) || undefined,
+					...(platform === 'whatsapp' && appSecret.trim() ? { app_secret: appSecret.trim() } : {}),
+					...(platform === 'whatsapp' && webhookVerifyToken.trim()
+						? { webhook_verify_token: webhookVerifyToken.trim() }
+						: {})
 				});
 			}
 			onsave();
@@ -230,6 +240,30 @@
 					✗ {verifyResult.error}
 				{/if}
 			</p>
+		{/if}
+
+		{#if platform === 'whatsapp'}
+			<!-- WhatsApp webhook security (optional) -->
+			<label class="text-[0.625rem] text-gray-400 dark:text-gray-600 mt-1">
+				{$t('messaging.appSecret')}
+			</label>
+			<input
+				type="password"
+				bind:value={appSecret}
+				placeholder={$t('messaging.appSecretHint')}
+				autocomplete="new-password"
+				class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-none py-0.5 font-mono"
+			/>
+			<label class="text-[0.625rem] text-gray-400 dark:text-gray-600 mt-1">
+				{$t('messaging.webhookVerifyToken')}
+			</label>
+			<input
+				type="password"
+				bind:value={webhookVerifyToken}
+				placeholder={$t('messaging.webhookVerifyTokenHint')}
+				autocomplete="new-password"
+				class="block w-full bg-transparent text-[0.8125rem] text-gray-700 dark:text-gray-300 placeholder:text-gray-300 dark:placeholder:text-gray-700 outline-none py-0.5 font-mono"
+			/>
 		{/if}
 
 		<!-- Allowed senders -->

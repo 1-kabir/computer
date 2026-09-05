@@ -29,6 +29,11 @@ class BotCreate(BaseModel):
     token: str
     allowed_senders: list[str] | None = None
     is_active: bool = True
+    # WhatsApp webhook security (optional).  app_secret enables
+    # X-Hub-Signature-256 verification; webhook_verify_token is the string
+    # Meta echoes during the GET verification challenge.
+    app_secret: str | None = None
+    webhook_verify_token: str | None = None
 
 
 class BotUpdate(BaseModel):
@@ -38,6 +43,8 @@ class BotUpdate(BaseModel):
     token: str | None = None
     allowed_senders: list[str] | None = None
     is_active: bool | None = None
+    app_secret: str | None = None
+    webhook_verify_token: str | None = None
 
 
 class TokenVerify(BaseModel):
@@ -119,6 +126,12 @@ async def create_bot(request: Request, body: BotCreate):
         "token": encrypt_key(body.token, _get_jwt_secret()),
         "allowed_senders": body.allowed_senders,
         "is_active": body.is_active,
+        "app_secret": encrypt_key(body.app_secret, _get_jwt_secret()) if body.app_secret else None,
+        "webhook_verify_token": (
+            encrypt_key(body.webhook_verify_token, _get_jwt_secret())
+            if body.webhook_verify_token
+            else None
+        ),
         "created_at": now,
         "updated_at": now,
     }
@@ -159,6 +172,16 @@ async def update_bot(request: Request, bot_id: str, body: BotUpdate):
         bot["allowed_senders"] = body.allowed_senders
     if body.is_active is not None:
         bot["is_active"] = body.is_active
+    if body.app_secret is not None:
+        bot["app_secret"] = (
+            encrypt_key(body.app_secret, _get_jwt_secret()) if body.app_secret else None
+        )
+    if body.webhook_verify_token is not None:
+        bot["webhook_verify_token"] = (
+            encrypt_key(body.webhook_verify_token, _get_jwt_secret())
+            if body.webhook_verify_token
+            else None
+        )
     bot["updated_at"] = int(time.time_ns())
 
     await upsert_bot(bot)
@@ -269,14 +292,46 @@ async def verify_token(request: Request, body: TokenVerify):
 webhook_router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 
+def _verify_whatsapp_signature(
+    raw_body: bytes, signature_header: str | None, app_secret: str
+) -> bool:
+    """Validate Meta's X-Hub-Signature-256 (HMAC-SHA256 of the raw body)."""
+    import hashlib
+    import hmac as hmac_mod
+
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = hmac_mod.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    provided = signature_header.removeprefix("sha256=")
+    return hmac_mod.compare_digest(expected, provided)
+
+
 @webhook_router.get("/whatsapp/{bot_id}")
 async def whatsapp_webhook_verify(request: Request, bot_id: str):
     """Meta webhook verification challenge (GET)."""
+    from cptr.utils.bridge import get_bot_by_id
+    from cptr.utils.config import _get_jwt_secret
+    from cptr.utils.crypto import decrypt_key
+
     mode = request.query_params.get("hub.mode")
     challenge = request.query_params.get("hub.challenge")
+    verify_token = request.query_params.get("hub.verify_token", "")
 
     if mode == "subscribe" and challenge:
-        # Accept any verify_token for now — user sets it in Meta dashboard
+        # Meta echoes back the verify token configured in its dashboard;
+        # validate it when the bot has one configured (optional for
+        # backward compatibility with existing setups).
+        expected_token = ""
+        bot = await get_bot_by_id(bot_id)
+        if bot and bot.get("webhook_verify_token"):
+            try:
+                expected_token = decrypt_key(bot["webhook_verify_token"], _get_jwt_secret())
+            except Exception:
+                logger.exception("[whatsapp] Failed to decrypt webhook_verify_token")
+        if expected_token and verify_token != expected_token:
+            logger.warning("[whatsapp] Webhook verification rejected for bot %s", bot_id[:8])
+            raise HTTPException(403, "Verification failed")
+
         from starlette.responses import PlainTextResponse
 
         return PlainTextResponse(challenge)
@@ -286,7 +341,9 @@ async def whatsapp_webhook_verify(request: Request, bot_id: str):
 @webhook_router.post("/whatsapp/{bot_id}")
 async def whatsapp_webhook_inbound(request: Request, bot_id: str):
     """Receive inbound WhatsApp messages via webhook."""
-    payload = await request.json()
+    from cptr.utils.bridge import get_bot_by_id
+    from cptr.utils.config import _get_jwt_secret
+    from cptr.utils.crypto import decrypt_key
 
     bot_manager = getattr(request.app.state, "bot_manager", None)
     if not bot_manager:
@@ -297,6 +354,23 @@ async def whatsapp_webhook_inbound(request: Request, bot_id: str):
         from cptr.utils.adapters.whatsapp import WhatsAppAdapter
 
         if isinstance(adapter, WhatsAppAdapter):
+            # Optional signature verification: when the bot has an app_secret
+            # configured, reject payloads without a valid X-Hub-Signature-256.
+            bot = await get_bot_by_id(bot_id)
+            app_secret = ""
+            if bot and bot.get("app_secret"):
+                try:
+                    app_secret = decrypt_key(bot["app_secret"], _get_jwt_secret())
+                except Exception:
+                    logger.exception("[whatsapp] Failed to decrypt app_secret")
+            if app_secret:
+                raw_body = await request.body()
+                signature = request.headers.get("x-hub-signature-256", "")
+                if not _verify_whatsapp_signature(raw_body, signature, app_secret):
+                    logger.warning("[whatsapp] Invalid webhook signature for bot %s", bot_id[:8])
+                    raise HTTPException(403, "Invalid signature")
+
+            payload = await request.json()
             await adapter.handle_webhook(payload)
 
     return {"status": "ok"}

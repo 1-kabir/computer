@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from typing import Optional
 
 import httpx
@@ -24,7 +25,9 @@ from cptr.utils.bridge import Attachment, BaseAdapter, MessageEvent, chunk_messa
 
 logger = logging.getLogger(__name__)
 
-API_BASE = "https://graph.facebook.com/v21.0"
+# v23.0 is the first GA version with typing indicators; docs examples use
+# v23–v25.  Bump deliberately when adopting newer Cloud API features.
+API_BASE = "https://graph.facebook.com/v23.0"
 MAX_MESSAGE_LEN = 4096
 
 
@@ -40,6 +43,9 @@ class WhatsAppAdapter(BaseAdapter):
     """WhatsApp bot via Cloud API + webhook inbound."""
 
     platform = "whatsapp"
+    # Cloud API messages cannot be edited — the bridge delivers replies via
+    # send() instead of edit-based streaming.
+    supports_edit = False
 
     def __init__(self, token: str, bot_id: str = "") -> None:
         super().__init__()
@@ -49,6 +55,11 @@ class WhatsAppAdapter(BaseAdapter):
         self._running = False
         self._message_queue: asyncio.Queue = asyncio.Queue()
         self._process_task: Optional[asyncio.Task] = None
+        # Last inbound message id from the webhook — required for the
+        # read-receipt / typing-indicator endpoint.
+        self._last_inbound_message_id: Optional[str] = None
+        # Recent inbound ids for redelivery dedupe (Meta retries webhooks).
+        self._seen_message_ids: deque[str] = deque(maxlen=256)
 
     # ── Lifecycle ──────────────────────────────────────────
 
@@ -96,6 +107,13 @@ class WhatsAppAdapter(BaseAdapter):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
                 for message in value.get("messages", []):
+                    msg_id = message.get("id", "")
+                    if msg_id:
+                        if msg_id in self._seen_message_ids:
+                            logger.debug("[whatsapp] Dropping redelivered message %s", msg_id)
+                            continue
+                        self._seen_message_ids.append(msg_id)
+                    self._last_inbound_message_id = msg_id or None
                     msg_type = message.get("type", "")
 
                     text = ""
@@ -103,50 +121,66 @@ class WhatsAppAdapter(BaseAdapter):
 
                     if msg_type == "text":
                         text = message.get("text", {}).get("body", "").strip()
+                    elif msg_type == "interactive":
+                        # Button / list replies arrive as interactive payloads;
+                        # surface the selected option title as plain text.
+                        interactive = message.get("interactive", {})
+                        reply = (
+                            interactive.get("button_reply") or interactive.get("list_reply") or {}
+                        )
+                        text = reply.get("title", "").strip()
                     elif msg_type == "image":
                         image = message.get("image", {})
                         text = image.get("caption", "").strip()
                         media_data = await self._download_media(image.get("id", ""))
                         if media_data:
-                            attachments.append(Attachment(
-                                type="image",
-                                filename="photo.jpg",
-                                data=media_data,
-                                mime_type=image.get("mime_type", "image/jpeg"),
-                            ))
+                            attachments.append(
+                                Attachment(
+                                    type="image",
+                                    filename="photo.jpg",
+                                    data=media_data,
+                                    mime_type=image.get("mime_type", "image/jpeg"),
+                                )
+                            )
                     elif msg_type == "audio":
                         audio = message.get("audio", {})
                         media_data = await self._download_media(audio.get("id", ""))
                         if media_data:
-                            attachments.append(Attachment(
-                                type="audio",
-                                filename="voice.ogg",
-                                data=media_data,
-                                mime_type=audio.get("mime_type", "audio/ogg"),
-                            ))
+                            attachments.append(
+                                Attachment(
+                                    type="audio",
+                                    filename="voice.ogg",
+                                    data=media_data,
+                                    mime_type=audio.get("mime_type", "audio/ogg"),
+                                )
+                            )
                     elif msg_type == "document":
                         doc = message.get("document", {})
                         text = doc.get("caption", "").strip()
                         media_data = await self._download_media(doc.get("id", ""))
                         if media_data:
                             fname = doc.get("filename", "document")
-                            attachments.append(Attachment(
-                                type="document",
-                                filename=fname,
-                                data=media_data,
-                                mime_type=doc.get("mime_type", "application/octet-stream"),
-                            ))
+                            attachments.append(
+                                Attachment(
+                                    type="document",
+                                    filename=fname,
+                                    data=media_data,
+                                    mime_type=doc.get("mime_type", "application/octet-stream"),
+                                )
+                            )
                     elif msg_type == "video":
                         video = message.get("video", {})
                         text = video.get("caption", "").strip()
                         media_data = await self._download_media(video.get("id", ""))
                         if media_data:
-                            attachments.append(Attachment(
-                                type="document",
-                                filename="video.mp4",
-                                data=media_data,
-                                mime_type=video.get("mime_type", "video/mp4"),
-                            ))
+                            attachments.append(
+                                Attachment(
+                                    type="document",
+                                    filename="video.mp4",
+                                    data=media_data,
+                                    mime_type=video.get("mime_type", "video/mp4"),
+                                )
+                            )
                     else:
                         continue
 
@@ -206,6 +240,12 @@ class WhatsAppAdapter(BaseAdapter):
                 },
             )
             data = resp.json()
+            if resp.status_code != 200:
+                logger.warning(
+                    "[whatsapp] Send failed (HTTP %d): %s",
+                    resp.status_code,
+                    data.get("error", {}).get("message", resp.text[:200]),
+                )
             if msg_id is None:
                 messages = data.get("messages", [])
                 if messages:
@@ -213,12 +253,28 @@ class WhatsAppAdapter(BaseAdapter):
         return msg_id
 
     async def edit(self, chat_id: str, message_id: str, text: str) -> None:
-        """WhatsApp doesn't support message editing. Send a new message instead."""
-        pass
+        """WhatsApp Cloud API is send-only: sent messages cannot be edited.
+
+        The bridge must not call this on WhatsApp (see supports_edit = False);
+        log loudly if it ever does so the dropped reply is diagnosable.
+        """
+        logger.warning(
+            "[whatsapp] edit() called but WhatsApp messages cannot be edited — "
+            "bridge should deliver via send() (chat %s)",
+            chat_id,
+        )
 
     async def send_typing(self, chat_id: str) -> None:
-        """Send a 'typing' indicator (read receipt + typing)."""
-        if not self._http:
+        """Mark the last inbound message read and show a typing indicator.
+
+        Cloud API syntax (Graph >= v23.0): POST /{phone_number_id}/messages
+        with {status: "read", message_id: <inbound wamid>,
+        typing_indicator: {type: "text"}}.  The indicator auto-dismisses
+        after 25 seconds or when the business replies, so refreshing it
+        periodically is the intended usage.  Requires a real inbound message
+        id — silently skip before any inbound message was seen.
+        """
+        if not self._http or not self._last_inbound_message_id:
             return
         try:
             await self._http.post(
@@ -226,7 +282,8 @@ class WhatsAppAdapter(BaseAdapter):
                 json={
                     "messaging_product": "whatsapp",
                     "status": "read",
-                    "message_id": "placeholder",
+                    "message_id": self._last_inbound_message_id,
+                    "typing_indicator": {"type": "text"},
                 },
             )
         except Exception:
@@ -257,14 +314,18 @@ class WhatsAppAdapter(BaseAdapter):
             logger.exception("[whatsapp] Failed to download media %s", media_id)
         return None
 
-    async def send_photo(self, chat_id: str, data: bytes, filename: str, caption: str = "") -> str | None:
+    async def send_photo(
+        self, chat_id: str, data: bytes, filename: str, caption: str = ""
+    ) -> str | None:
         """Send a photo via WhatsApp media upload."""
         media_id = await self._upload_media(data, filename, "image/jpeg")
         if not media_id:
             return await self.send(chat_id, caption) if caption else None
         return await self._send_media_message(chat_id, "image", media_id, caption)
 
-    async def send_document(self, chat_id: str, data: bytes, filename: str, caption: str = "") -> str | None:
+    async def send_document(
+        self, chat_id: str, data: bytes, filename: str, caption: str = ""
+    ) -> str | None:
         """Send a document via WhatsApp media upload."""
         media_id = await self._upload_media(data, filename, "application/octet-stream")
         if not media_id:
@@ -288,7 +349,12 @@ class WhatsAppAdapter(BaseAdapter):
         return None
 
     async def _send_media_message(
-        self, chat_id: str, media_type: str, media_id: str, caption: str = "", filename: str = "",
+        self,
+        chat_id: str,
+        media_type: str,
+        media_id: str,
+        caption: str = "",
+        filename: str = "",
     ) -> str | None:
         """Send a media message using an uploaded media_id."""
         if not self._http:
@@ -314,7 +380,6 @@ class WhatsAppAdapter(BaseAdapter):
         except Exception:
             logger.exception("[whatsapp] Failed to send %s message", media_type)
         return None
-
 
 
 async def verify_token(token: str) -> dict:
