@@ -1,9 +1,10 @@
 # Issue: WhatsApp bridge silently drops final agent replies
 
 > Design record. `1-kabir/computer` has GitHub Issues disabled, so fork issues
-> are recorded here in-repo. Status: **OPEN → fixed by branch
-> `fix/whatsapp-bridge-delivery`**.
-> Cross-filed upstream: [open-webui/computer#264](https://github.com/open-webui/computer/issues/264).
+> are recorded here in-repo. Status: **FIXED — merged to fork `main` 2026-09-05**
+> (branch `fix/whatsapp-bridge-delivery`).
+> Cross-filed upstream: [open-webui/computer#264](https://github.com/open-webui/computer/issues/264)
+> (fork implementation noted there).
 
 - **Filed:** 2026-09-05
 - **Platform:** WhatsApp Cloud API (Meta), Graph API v21.0 as shipped
