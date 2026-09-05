@@ -44,6 +44,18 @@ export interface ChatTask {
 	status: TaskStatus;
 }
 
+export type SubagentStatus = 'starting' | 'running' | 'completed' | 'interrupted' | 'error';
+
+export interface SubagentInfo {
+	delegation_id: string;
+	task: string;
+	status: SubagentStatus;
+	subagent_chat_id?: string | null;
+	error?: string | null;
+	dispatched_at: number;
+	completed_at?: number | null;
+}
+
 export interface ChatDetail {
 	chat: ChatInfo;
 	messages: ChatMessageRow[];
@@ -217,6 +229,16 @@ export const compactChat = (chatId: string, modelId?: string | null) =>
 		`/api/chats/${chatId}/compact`,
 		jsonBody({ model_id: modelId || null })
 	);
+
+// ── Subagents ───────────────────────────────────────────────
+
+export const listChatSubagents = (chatId: string) =>
+	fetchJSON<{ subagents: SubagentInfo[] }>(`/api/chats/${chatId}/subagents`);
+
+export const cancelChatSubagent = (chatId: string, delegationId: string) =>
+	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}/subagents/${delegationId}/cancel`, {
+		method: 'POST'
+	});
 
 export const updateCurrentMessage = (chatId: string, messageId: string) =>
 	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}/current`, jsonBody({ message_id: messageId }));

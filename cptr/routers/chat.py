@@ -649,6 +649,37 @@ async def _fetch_provider_models(conn: dict) -> list[str] | None:
 # ── Get a chat with all messages ────────────────────────────
 
 
+@router.get("/{chat_id}/subagents")
+async def list_chat_subagents(chat_id: str, request: Request):
+    """List background subagent delegations for a chat (in-memory, current process)."""
+    user_id = _get_user(request)
+    chat = await Chat.get_by_id(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(404, "chat not found")
+
+    from cptr.utils.async_subagents import list_async_subagents
+
+    return {"subagents": list_async_subagents(chat_id)}
+
+
+@router.post("/{chat_id}/subagents/{delegation_id}/cancel")
+async def cancel_chat_subagent(chat_id: str, delegation_id: str, request: Request):
+    """Cancel a running background subagent belonging to a chat."""
+    user_id = _get_user(request)
+    chat = await Chat.get_by_id(chat_id)
+    if not chat or chat.user_id != user_id:
+        raise HTTPException(404, "chat not found")
+
+    from cptr.utils.async_subagents import cancel_async_subagent, list_async_subagents
+
+    records = list_async_subagents(chat_id)
+    if not any(r.get("delegation_id") == delegation_id for r in records):
+        raise HTTPException(404, "subagent not found")
+
+    cancelled = await cancel_async_subagent(delegation_id)
+    return {"ok": cancelled}
+
+
 @router.get("/{chat_id}")
 async def get_chat(
     chat_id: str,

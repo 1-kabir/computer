@@ -2588,15 +2588,10 @@ async def delegate_task(
         )
 
     if config["max_concurrent"] == -1:
-        return await _run_subagent_chat(
-            __context__["request"],
+        return await _run_tracked_subagent_chat(
+            __context__,
             task=task,
             context=context,
-            workspace=__context__["workspace"],
-            connection=__context__["connection"],
-            model=__context__["model_id"],
-            user_id=__context__["user_id"],
-            parent_chat_id=__context__["chat_id"],
             config=config,
         )
 
@@ -2604,17 +2599,40 @@ async def delegate_task(
         _subagent_semaphore = asyncio.Semaphore(max(1, config["max_concurrent"]))
 
     async with _subagent_semaphore:
-        return await _run_subagent_chat(
-            __context__["request"],
+        return await _run_tracked_subagent_chat(
+            __context__,
             task=task,
             context=context,
-            workspace=__context__["workspace"],
-            connection=__context__["connection"],
-            model=__context__["model_id"],
-            user_id=__context__["user_id"],
-            parent_chat_id=__context__["chat_id"],
             config=config,
         )
+
+
+async def _run_tracked_subagent_chat(__context__: dict, task: str, context: str, config: dict):
+    """Run a foreground sub-agent and return the same JSON shape as background dispatches."""
+    from cptr.utils.async_subagents import _new_delegation_id
+
+    delegation_id = _new_delegation_id()
+    chat, _, _ = await _run_subagent_chat(
+        __context__["request"],
+        task=task,
+        context=context,
+        workspace=__context__["workspace"],
+        connection=__context__["connection"],
+        model=__context__["model_id"],
+        user_id=__context__["user_id"],
+        parent_chat_id=__context__["chat_id"],
+        config=config,
+        delegation_id=delegation_id,
+    )
+    return json.dumps(
+        {
+            "status": "completed",
+            "delegation_id": delegation_id,
+            "subagent_chat_id": chat.id,
+            "mode": "foreground",
+            "task": task,
+        }
+    )
 
 
 async def timer(
@@ -2797,6 +2815,7 @@ async def _run_subagent_chat(
     user_id: str,
     parent_chat_id: str,
     config: dict,
+    delegation_id: str | None = None,
 ) -> str:
     """Create a real chat and run the agent loop on it."""
     chat, _, assistant_msg = await _create_subagent_chat(
@@ -2807,6 +2826,7 @@ async def _run_subagent_chat(
         model=model,
         user_id=user_id,
         parent_chat_id=parent_chat_id,
+        delegation_id=delegation_id,
     )
     return await _run_existing_subagent_chat(
         assistant_msg_id=assistant_msg.id,

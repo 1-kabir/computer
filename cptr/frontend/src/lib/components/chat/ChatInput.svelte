@@ -21,13 +21,14 @@
 	import { searchFiles } from '$lib/apis/files';
 	import { getSkills } from '$lib/apis/skills';
 	import { uploadFile } from '$lib/apis/files';
-	import type { ChatTask, ContextUsage } from '$lib/apis/chat';
+	import type { ChatTask, ContextUsage, SubagentInfo } from '$lib/apis/chat';
 	import ModelSelector from '../common/ModelSelector.svelte';
 	import SendButton from './SendButton.svelte';
 	import PlusMenu from './PlusMenu.svelte';
 	import DictateButton from './DictateButton.svelte';
 	import QueuedMessageItem from './QueuedMessageItem.svelte';
 	import Tasks from './Tasks.svelte';
+	import SubagentsBar from './SubagentsBar.svelte';
 	import AskUserCard from './AskUserCard.svelte';
 	import Icon from '../Icon.svelte';
 	import type { ToolApprovalMode } from '$lib/apis/chat';
@@ -76,6 +77,8 @@
 		placeholder?: string;
 		contextUsage?: ContextUsage | null;
 		tasks?: ChatTask[];
+		subagents?: SubagentInfo[];
+		onkillsubagent?: (delegationId: string) => void;
 		askUser?: any;
 		queuedMessages?: { id: string; content: string }[];
 		hasChatContent?: boolean;
@@ -111,6 +114,8 @@
 		placeholder = 'Message...',
 		contextUsage = null,
 		tasks = [],
+		subagents = [],
+		onkillsubagent,
 		askUser = null,
 		queuedMessages = [],
 		hasChatContent = false,
@@ -1248,6 +1253,12 @@
 	{#if tasks.length > 0}
 		<div class="mx-1">
 			<Tasks {tasks} />
+		</div>
+	{/if}
+
+	{#if subagents.length > 0}
+		<div class="mx-1">
+			<SubagentsBar {subagents} onkill={onkillsubagent} />
 		</div>
 	{/if}
 

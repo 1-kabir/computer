@@ -4,7 +4,7 @@
 	import MarkdownRenderer from '$lib/components/markdown/MarkdownRenderer.svelte';
 	import MessageTimestamp from './MessageTimestamp.svelte';
 	import { fileIconName } from '$lib/utils/fileIcon';
-	import { openFileTab, setFileBrowserCwd, setActiveTab } from '$lib/stores';
+	import { openFileTab, setFileBrowserCwd, setActiveTab, openChatTab } from '$lib/stores';
 	import { tooltip } from '$lib/tooltip';
 	import { t } from '$lib/i18n';
 
@@ -62,6 +62,7 @@
 	const isTimer = $derived(meta?.internal === true && meta?.type === 'timer');
 	const delegationId = $derived(meta?.delegation_id || '');
 	const delegationIds = $derived(Array.isArray(meta?.delegation_ids) ? meta.delegation_ids : []);
+	const subagentChatId = $derived(meta?.subagent_chat_id || '');
 	const delegationLabel = $derived(
 		delegationId || (delegationIds.length > 1 ? `${delegationIds.length} tasks` : '')
 	);
@@ -179,6 +180,16 @@
 						: ''}"
 				/>
 			</button>
+			{#if subagentChatId}
+				<button
+					type="button"
+					class="mt-1 flex w-fit items-center gap-1 text-[0.6875rem] px-2 py-0.5 rounded-md text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-white/8 hover:bg-gray-200 dark:hover:bg-white/12 transition-colors duration-100"
+					onclick={() => openChatTab(subagentChatId)}
+				>
+					<Icon name="external-link" size={11} />
+					{$t('chat.subagentsOpenChat')}
+				</button>
+			{/if}
 			{#if asyncExpanded}
 				<div
 					class="mt-2 ml-3 border-l border-gray-100 dark:border-white/8 pl-3 text-[0.78125rem] leading-relaxed text-gray-600 dark:text-gray-400 whitespace-pre-wrap break-words"

@@ -2,7 +2,8 @@
 	import { slide } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 	import { t } from '$lib/i18n';
-	import { expandToolDetails } from '$lib/stores';
+	import { expandToolDetails, openChatTab } from '$lib/stores';
+	import { tooltip } from '$lib/tooltip';
 
 	interface Props {
 		item: any;
@@ -57,6 +58,15 @@
 			return JSON.stringify(JSON.parse(pairedOutput.output), null, 2);
 		} catch {
 			return pairedOutput.output;
+		}
+	});
+	const delegateSubagentChatId = $derived.by(() => {
+		if (toolName !== 'delegate_task' || !pairedOutput?.output) return '';
+		try {
+			const parsed = JSON.parse(pairedOutput.output);
+			return typeof parsed.subagent_chat_id === 'string' ? parsed.subagent_chat_id : '';
+		} catch {
+			return '';
 		}
 	});
 	function toggleExpanded() {
@@ -205,6 +215,19 @@
 				</span>
 			{:else}
 				<div class="flex shrink-0 items-center gap-1 self-center">
+					{#if delegateSubagentChatId}
+						<button
+							type="button"
+							class="text-[0.6875rem] px-2 py-0.5 rounded-md text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-white/8 hover:bg-gray-200 dark:hover:bg-white/12 transition-colors duration-100"
+							onclick={(e) => {
+								e.stopPropagation();
+								openChatTab(delegateSubagentChatId);
+							}}
+							use:tooltip={$t('chat.subagentsOpenChat')}
+						>
+							{$t('chat.subagentsOpen')}
+						</button>
+					{/if}
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
 						fill="none"
