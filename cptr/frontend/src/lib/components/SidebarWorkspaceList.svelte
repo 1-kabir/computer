@@ -13,6 +13,7 @@
 	import {
 		deleteChat as apiDeleteChat,
 		getChats,
+		markWorkspaceRead,
 		updateChatTitle,
 		type ChatInfo
 	} from '$lib/apis/chat';
@@ -23,6 +24,7 @@
 	import ChatItem from './common/ChatItem.svelte';
 	import DropdownMenu from './DropdownMenu.svelte';
 	import Icon from './Icon.svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		onaddworkspace: () => void;
@@ -150,6 +152,18 @@
 		closeWsMenu();
 		await removeWorkspace(path);
 		if (currentPath === path) goto('/');
+	}
+
+	async function handleMarkWorkspaceRead(path: string) {
+		closeWsMenu();
+		try {
+			await markWorkspaceRead(path);
+			// Server pushes chat:read_all; also refresh locally for instant feedback.
+			const data = await getChats(path, WS_CHATS_PAGE_SIZE, 0, 'updated_at', 'desc');
+			wsChatsCache = new Map([...wsChatsCache, [path, data.chats]]);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : String(e));
+		}
 	}
 
 	async function handleDeleteChat() {
@@ -450,6 +464,11 @@
 	<DropdownMenu
 		anchor={wsMenuAnchor}
 		items={[
+			{
+				label: $t('sidebar.markAllRead'),
+				icon: 'check',
+				onclick: () => handleMarkWorkspaceRead(wsMenuPath!)
+			},
 			{
 				label: $t('sidebar.remove'),
 				icon: 'xmark',

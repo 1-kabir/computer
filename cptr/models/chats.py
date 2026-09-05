@@ -267,6 +267,46 @@ class Chat(Base):
             return {workspace: count for workspace, count in result.all() if workspace}
 
     @staticmethod
+    async def workspace_paths_for_user(user_id: str) -> list[tuple]:
+        """Distinct workspace paths this user has chats in."""
+        workspace = Chat.meta["workspace"].as_string()
+        statement = (
+            select(workspace)
+            .where(
+                Chat.user_id == user_id,
+                Chat.meta.is_not(None),
+                workspace.is_not(None),
+                workspace != "",
+            )
+            .distinct()
+        )
+        async with await get_db() as db:
+            result = await db.execute(statement)
+            return [(path,) for (path,) in result.all() if path]
+
+    @staticmethod
+    async def mark_all_read(user_id: str, workspace_path: str | None, last_read_at: int) -> int:
+        """Stamp last_read_at on every unread chat, optionally scoped to one workspace.
+
+        Mirrors unread_counts_by_workspace filters so 'mark as read' clears
+        exactly the chats those counts were derived from. Returns rows updated.
+        """
+        workspace = Chat.meta["workspace"].as_string()
+        filters = [
+            Chat.user_id == user_id,
+            Chat.meta["internal"].as_boolean().is_not(True),
+            Chat.meta["subagent"].as_boolean().is_not(True),
+            Chat.updated_at > func.coalesce(Chat.last_read_at, 0),
+        ]
+        if workspace_path:
+            filters.append(workspace == workspace_path)
+        statement = update(Chat).where(*filters).values(last_read_at=last_read_at)
+        async with await get_db() as db:
+            result = await db.execute(statement)
+            await db.commit()
+            return result.rowcount or 0
+
+    @staticmethod
     async def update_last_read_at(chat_id: str, user_id: str, last_read_at: int) -> bool:
         """Mark a chat read without changing its activity timestamp."""
         async with await get_db() as db:

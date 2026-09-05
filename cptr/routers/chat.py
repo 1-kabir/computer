@@ -237,6 +237,49 @@ async def list_chats(
     }
 
 
+# NOTE: Must be declared before /{chat_id} routes to avoid 'read-all' being
+# treated as a chat_id.
+@router.post("/read-all")
+async def mark_all_chats_read(request: Request, body: MarkWorkspaceReadRequest):
+    """Mark every unread chat in a workspace (or all workspaces) as read.
+
+    Bulk variant of the chat:read socket event: stamps last_read_at on all
+    chats that currently count as unread for the user, then pushes fresh
+    workspace unread counts so every connected client updates in place.
+    """
+    user_id = _get_user(request)
+    updated_at = now_ms()
+    marked = await Chat.mark_all_read(user_id, body.workspace or None, updated_at)
+
+    from cptr.models.users import UserStates
+    from cptr.socket.main import emit_to_user
+    from cptr.utils.chat_task import get_active_chat_ids
+
+    mute_bridge = await UserStates.get_flag(user_id, "bridge_notifications_muted")
+    paths = (
+        [body.workspace]
+        if body.workspace
+        else [path for (path,) in await Chat.workspace_paths_for_user(user_id)]
+    )
+    unread_counts = await Chat.unread_counts_by_workspace(
+        user_id,
+        paths,
+        get_active_chat_ids(),
+        exclude_bridge=mute_bridge,
+    )
+    await emit_to_user(
+        user_id,
+        {
+            "type": "chat:read_all",
+            "workspace": body.workspace or None,
+            "last_read_at": updated_at,
+            "marked": marked,
+            "unread_counts": unread_counts,
+        },
+    )
+    return {"ok": True, "marked": marked, "unread_counts": unread_counts}
+
+
 # ── Models aggregation ──────────────────────────────────────
 # NOTE: Must be declared before /{chat_id} to avoid 'models' being treated as a chat_id.
 
@@ -818,6 +861,10 @@ async def _get_latest_usage_checkpoint(
 
 
 # ── Delete a chat ───────────────────────────────────────────
+
+
+class MarkWorkspaceReadRequest(BaseModel):
+    workspace: str | None = None
 
 
 class UpdateChatRequest(BaseModel):

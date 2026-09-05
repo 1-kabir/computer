@@ -155,6 +155,16 @@ export const updateChatTitle = (chatId: string, title: string) =>
 		body: JSON.stringify({ title })
 	});
 
+export const markWorkspaceRead = (workspace?: string) =>
+	fetchJSON<{ ok: boolean; marked: number; unread_counts: Record<string, number> }>(
+		'/api/chats/read-all',
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ workspace: workspace ?? null })
+		}
+	);
+
 export const updateChatSettings = (chatId: string, modelId: string, params: ChatSendParams) =>
 	fetchJSON<{ ok: boolean }>(
 		`/api/chats/${chatId}/settings`,
