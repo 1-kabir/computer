@@ -144,6 +144,7 @@ export interface UserPreferences {
 	widescreenMode?: boolean;
 	expandToolDetails?: boolean;
 	bridgeNotificationsMuted?: boolean;
+	autoContinue?: boolean;
 	homeGroup?: EditorGroup;
 	homeState?: HomeState;
 	git?: {
@@ -353,6 +354,8 @@ export const textScale = writable<number | null>(null);
 export const borderContrast = writable<number | null>(null);
 export const widescreenMode = writable(false);
 export const expandToolDetails = writable(false);
+/** Auto-send a continue message when the harness detects a truncated provider response. */
+export const autoContinue = writable(false);
 
 /** Saved workspace path order for sidebar drag-reorder. */
 export const workspaceOrder = writable<string[]>([]);
@@ -463,6 +466,7 @@ function persistPreferences(): void {
 			widescreenMode: get(widescreenMode),
 			expandToolDetails: get(expandToolDetails),
 			bridgeNotificationsMuted: get(bridgeNotificationsMuted),
+			autoContinue: get(autoContinue),
 			homeState: get(homeState)
 		};
 		savePreferences(prefs as unknown as Record<string, unknown>).catch(() => {});
@@ -521,6 +525,9 @@ function subscribeForPersistence() {
 	expandToolDetails.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
+	autoContinue.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
 	bridgeNotificationsMuted.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
@@ -570,6 +577,7 @@ export async function loadPreferences(): Promise<void> {
 		if (prefs.widescreenMode !== undefined) widescreenMode.set(prefs.widescreenMode as boolean);
 		if (prefs.expandToolDetails !== undefined)
 			expandToolDetails.set(prefs.expandToolDetails as boolean);
+		if (prefs.autoContinue !== undefined) autoContinue.set(prefs.autoContinue as boolean);
 		if (prefs.bridgeNotificationsMuted !== undefined)
 			bridgeNotificationsMuted.set(prefs.bridgeNotificationsMuted as boolean);
 		const savedHomeGroup = prefs.homeGroup as EditorGroup | undefined;

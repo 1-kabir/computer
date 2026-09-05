@@ -44,7 +44,8 @@
 		openChatTab,
 		streamingBehavior,
 		toolApprovalMode as defaultToolApprovalMode,
-		widescreenMode
+		widescreenMode,
+		autoContinue
 	} from '$lib/stores';
 	import { getPathDisplayName } from '$lib/utils/paths';
 	import {
@@ -348,6 +349,56 @@
 
 	const streaming = $derived(allMessages.some((m) => m.role === 'assistant' && !m.done));
 	const isLanding = $derived(allMessages.length === 0 && !chatId);
+
+	// ── Truncation / Continue affordance ─────────────────────
+	// The last completed assistant message on the active path that the provider
+	// cut off early. Never shown while a task is streaming.
+	const truncatedMessage = $derived.by(() => {
+		if (streaming) return null;
+		for (let i = activePath.length - 1; i >= 0; i--) {
+			const msg = activePath[i].msg;
+			if (msg.role === 'assistant' && msg.done && msg.meta?.truncated) return msg;
+			// stop at the newest completed exchange
+			if (msg.role === 'assistant' && msg.done) return null;
+		}
+		return null;
+	});
+	let chatIsBridge = $state(false);
+	let autoContinueAttempts = $state<Record<string, number>>({});
+	$effect(() => {
+		const msg = truncatedMessage;
+		if (!msg || !get(autoContinue) || chatIsBridge) return;
+		const count = autoContinueAttempts[msg.id] ?? 0;
+		if (count >= 2) return;
+		// Guard: don't fire while user is composing; wait a beat for socket syncs
+		const timer = setTimeout(() => {
+			if (inputText.trim()) return;
+			autoContinueAttempts = { ...autoContinueAttempts, [msg.id]: count + 1 };
+			void sendContinue('auto');
+		}, 2000);
+		return () => clearTimeout(timer);
+	});
+	async function sendContinue(mode: 'manual' | 'auto') {
+		if (sending || streaming) return;
+		const parentId =
+			activePath.length > 0 ? activePath[activePath.length - 1].msg.id : null;
+		if (!selectedModel) return;
+		sending = true;
+		try {
+			await apiSendMessage(
+				mode === 'auto' ? 'Continue' : 'Continue from where you were cut off.',
+				selectedModel,
+				workspace ?? '',
+				chatId ?? undefined,
+				parentId,
+				getChatSendParams(),
+				undefined,
+				undefined
+			);
+		} finally {
+			sending = false;
+		}
+	}
 	const hasChatContent = $derived(
 		activePath.some(({ msg }) => msg.role === 'user' && msg.content.trim())
 	);
@@ -764,6 +815,7 @@
 
 	function loadChatSettings(meta: Record<string, any> | null) {
 		resetChatSettings();
+		chatIsBridge = Boolean(meta?.bridge_bot_id);
 		const params = meta?.params;
 		if (!params || typeof params !== 'object') return;
 		if (
@@ -1932,6 +1984,38 @@
 							/>
 						{/if}
 					{/each}
+				</div>
+			</div>
+		{/if}
+
+		{#if truncatedMessage && !streaming}
+			<div class="px-4 pb-1" style="background: var(--app-bg);">
+				<div class="{$widescreenMode ? 'max-w-full' : 'max-w-2xl'} mx-auto w-full">
+					<div
+						class="app-surface app-interactive flex items-center gap-2 rounded-lg border border-amber-300/40 dark:border-amber-500/30 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400"
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 20 20"
+							fill="currentColor"
+							class="w-3.5 h-3.5 shrink-0"
+							aria-hidden="true"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z"
+								clip-rule="evenodd"
+							/>
+						</svg>
+						<span class="truncate">{$t('chat.responseCutOff')}</span>
+						<button
+							class="shrink-0 ml-auto rounded-md px-2 py-0.5 text-[0.6875rem] font-medium bg-amber-500/10 hover:bg-amber-500/20 dark:bg-amber-400/10 dark:hover:bg-amber-400/20 transition-colors"
+							disabled={sending}
+							onclick={() => sendContinue('manual')}
+						>
+							{$t('chat.continue')}
+						</button>
+					</div>
 				</div>
 			</div>
 		{/if}
