@@ -156,6 +156,8 @@
 	"memory.limits": "Лимиты",
 	"memory.reviewEvery": "Проверять каждые",
 	"memory.userLimit": "Лимит пользователя",
+	"memory.workspaceLimit": "Лимит рабочего пространства",
+	"memory.workspaceLimitHint": "Переопределяет глобальный лимит рабочего пространства для этого пространства.",
 	"memory.userMemory": "Память пользователя",
 	"general.title": "Основные",
 	"general.theme": "Тема",

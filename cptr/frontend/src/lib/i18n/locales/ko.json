@@ -156,6 +156,8 @@
 	"memory.limits": "제한",
 	"memory.reviewEvery": "검토 간격",
 	"memory.userLimit": "사용자 제한",
+	"memory.workspaceLimit": "워크스페이스 제한",
+	"memory.workspaceLimitHint": "이 워크스페이스의 전역 워크스페이스 제한을 재정의합니다.",
 	"memory.userMemory": "사용자 메모리",
 	"general.title": "일반",
 	"general.theme": "테마",

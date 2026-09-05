@@ -43,7 +43,7 @@
 		if (!settings) return;
 		saving = true;
 		try {
-			const result = await updateMemorySettings(settings);
+			const result = await updateMemorySettings(settings, workspace);
 			settings = result.settings;
 			toast.success($t('settings.saved'));
 		} catch {
@@ -153,6 +153,23 @@
 							class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none transition-colors"
 						/>
 					</div>
+					{#if workspace}
+						<div>
+							<label class="text-xs text-gray-600 dark:text-gray-400" for="memory-workspace-limit">
+								{$t('memory.workspaceLimit')}
+							</label>
+							<input
+								id="memory-workspace-limit"
+								type="number"
+								min="250"
+								bind:value={settings.workspace_char_limit}
+								class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none transition-colors"
+							/>
+							<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 -mt-1">
+								{$t('memory.workspaceLimitHint')}
+							</p>
+						</div>
+					{/if}
 				</div>
 
 				{#if userEntries.length > 0}

@@ -10,9 +10,9 @@ from pydantic import BaseModel
 from cptr.utils.config import AuthResult, check_access
 from cptr.utils.memory import (
     list_memory_files_state,
-    remember,
     read_memory_file_state,
     read_memory_state,
+    remember,
     review_memory_vault,
     save_memory_settings,
     search_memory_state,
@@ -44,6 +44,7 @@ def _require_admin(request: Request) -> AuthResult:
 
 class MemorySettingsRequest(BaseModel):
     settings: dict[str, Any]
+    workspace: str = ""
 
 
 class MemoryUpdateRequest(BaseModel):
@@ -76,7 +77,7 @@ async def get_memory(request: Request, workspace: str = Query("")):
 @router.put("/config")
 async def put_memory_settings(request: Request, body: MemorySettingsRequest):
     _require_admin(request)
-    return {"settings": await save_memory_settings(body.settings)}
+    return {"settings": await save_memory_settings(body.settings, workspace=body.workspace)}
 
 
 @router.post("/update")

@@ -156,6 +156,8 @@
 	"memory.limits": "Grenzwerte",
 	"memory.reviewEvery": "Prüfen alle",
 	"memory.userLimit": "Benutzerlimit",
+	"memory.workspaceLimit": "Arbeitsbereich-Limit",
+	"memory.workspaceLimitHint": "Überschreibt das globale Arbeitsbereich-Limit für diesen Arbeitsbereich.",
 	"memory.userMemory": "Benutzerspeicher",
 	"general.title": "Allgemein",
 	"general.theme": "Design",

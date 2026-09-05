@@ -156,6 +156,8 @@
 	"memory.limits": "Límites",
 	"memory.reviewEvery": "Revisar cada",
 	"memory.userLimit": "Límite de usuario",
+	"memory.workspaceLimit": "Límite del espacio de trabajo",
+	"memory.workspaceLimitHint": "Anula el límite global del espacio de trabajo para este espacio.",
 	"memory.userMemory": "Memoria de usuario",
 	"general.title": "Configuración general",
 	"general.theme": "Tema",
