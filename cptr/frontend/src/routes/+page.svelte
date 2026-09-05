@@ -36,7 +36,7 @@
 	import { createSession, deleteSession } from '$lib/apis/terminal';
 	import { createBrowserSession, deleteBrowserSession } from '$lib/apis/browser';
 	import { createEntry, writeFile, uploadFiles as uploadFilesApi } from '$lib/apis/files';
-	import { getChat, getChats, type ChatInfo } from '$lib/apis/chat';
+	import { getChat, getChats, updateChatTitle, type ChatInfo } from '$lib/apis/chat';
 	import { deleteSharePayload, getSharePayload } from '$lib/intents/payloadStore';
 	import type { LaunchIntent, ShareBehavior, SharePayload } from '$lib/intents/types';
 	import FileBrowser from '$lib/components/FileBrowser.svelte';
@@ -186,13 +186,29 @@
 		if (!tabs.length) closeHomeGroup(groupId);
 	}
 
-	function renameHomeTab(tabId: string, label: string, groupId = $homeState.activeGroupId) {
+	async function renameHomeTab(tabId: string, label: string, groupId = $homeState.activeGroupId) {
 		const group = $homeState.groups.find((item) => item.id === groupId);
 		if (!group) return;
 		const tab = group.tabs.find((item) => item.id === tabId);
 		if (!tab || tab.permanent) return;
 		const value = label.trim().slice(0, 120);
 		if (!value) return;
+		// Chat tabs must rename the chat itself, not just the local tab label,
+		// otherwise the next chat load overwrites the label with the DB title
+		// and the sidebar never learns about the change.
+		if (
+			tab.type === 'chat' &&
+			tab.path &&
+			!tab.path.startsWith('new-') &&
+			!tab.path.startsWith('pending-')
+		) {
+			try {
+				await updateChatTitle(tab.path, value);
+			} catch (e) {
+				toast.error(e instanceof Error ? e.message : String(e));
+				return;
+			}
+		}
 		updateHomeTabs(groupId, (tabs) => ({
 			tabs: tabs.map((item) => (item.id === tabId ? { ...item, label: value } : item)),
 			activeTabId: group.activeTabId
