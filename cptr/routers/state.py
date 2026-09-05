@@ -101,10 +101,15 @@ def _workspace_display_name(path: str) -> str:
 async def _workspace_summaries(user_id: str) -> list[dict[str, str | int]]:
     workspaces = await Workspace.get_by_user(user_id)
     summaries = _dedupe_workspaces(workspaces)
+    from cptr.models.users import UserStates
     from cptr.utils.chat_task import get_active_chat_ids
 
+    mute_bridge = await UserStates.get_flag(user_id, "bridge_notifications_muted")
     unread_counts = await Chat.unread_counts_by_workspace(
-        user_id, [path for path, _ in summaries], get_active_chat_ids()
+        user_id,
+        [path for path, _ in summaries],
+        get_active_chat_ids(),
+        exclude_bridge=mute_bridge,
     )
     return [
         {
