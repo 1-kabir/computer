@@ -60,3 +60,30 @@ def test_empty_string_leaf_treated_as_missing():
 def test_returns_none_without_any_anchor():
     chat = SimpleNamespace(current_message_id="gone")
     assert _resolve_injection_parent_id(chat, [], {}) is None
+
+
+def test_serialize_record_is_json_safe():
+    """Regression: records hold a live Starlette Request and runner task; the
+    snapshot must never include them or the /subagents API 500s with
+    RecursionError and the subagents bar never renders."""
+    import json
+
+    from cptr.utils.async_subagents import _serialize_record
+
+    class _Unserializable:
+        def __init__(self):
+            self.me = self  # circular reference
+
+    record = {
+        "delegation_id": "deleg_x",
+        "task": "do things",
+        "status": "running",
+        "request": _Unserializable(),
+        "connection": _Unserializable(),
+        "task_handle": _Unserializable(),
+        "secret_internal": "nope",
+    }
+    safe = _serialize_record(record)
+    json.dumps(safe)  # must not raise
+    assert "request" not in safe and "connection" not in safe
+    assert safe["delegation_id"] == "deleg_x" and safe["status"] == "running"

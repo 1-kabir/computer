@@ -102,7 +102,7 @@ async def start_async_subagent(
             status = "interrupted"
             error = "cancelled"
             raise
-        except Exception as exc:  # noqa: BLE001 - completion must still be recorded
+        except Exception as exc:
             logger.exception("Async subagent %s failed", delegation_id)
             status = "error"
             error = f"{type(exc).__name__}: {exc}"
@@ -157,13 +157,44 @@ async def cancel_async_subagent(delegation_id: str, reason: str = "user request"
     return False
 
 
+_SERIALIZABLE_RECORD_FIELDS = (
+    "delegation_id",
+    "task",
+    "context",
+    "workspace",
+    "parent_chat_id",
+    "parent_message_id",
+    "model",
+    "model_id",
+    "status",
+    "summary",
+    "error",
+    "dispatched_at",
+    "completed_at",
+    "subagent_chat_id",
+    "subagent_message_id",
+)
+
+
+def _serialize_record(record: dict[str, Any]) -> dict[str, Any]:
+    """JSON-safe projection of a record.
+
+    Records hold live runtime objects (the Starlette Request, the runner task,
+    the connection handle) that must never reach an HTTP response or socket
+    payload: FastAPI's encoder recurses into them and dies with RecursionError
+    (observed as HTTP 500 on GET /api/chats/{id}/subagents), which silently
+    killed the subagents bar. Whitelist instead of blocklist.
+    """
+    return {k: record[k] for k in _SERIALIZABLE_RECORD_FIELDS if k in record}
+
+
 def list_async_subagents(parent_chat_id: str | None = None) -> list[dict[str, Any]]:
     """Return a serializable snapshot of records, optionally scoped to one parent chat."""
     snapshot = []
     for record in _records.values():
         if parent_chat_id and record.get("parent_chat_id") != parent_chat_id:
             continue
-        snapshot.append({k: v for k, v in record.items() if k != "task"})
+        snapshot.append(_serialize_record(record))
     return snapshot
 
 
@@ -201,7 +232,7 @@ async def _finalize(
         record["summary"] = summary
         record["error"] = error
         record["completed_at"] = time.time()
-        snapshot = {k: v for k, v in record.items() if k != "task"}
+        snapshot = _serialize_record(record)
         _prune_completed_locked()
 
     injector = _completion_injector_override or _inject_completion

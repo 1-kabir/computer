@@ -52,7 +52,9 @@ def test_list_filters_by_parent_chat_and_hides_task():
 
         only_a = list_async_subagents("chat-a")
         assert [r["delegation_id"] for r in only_a] == [reserve_a["delegation_id"]]
-        assert all("task" not in r for r in only_a)
+        # Whitelisted fields only: runtime objects (request/connection/task
+        # handle) must never leak into the snapshot.
+        assert all("request" not in r and "connection" not in r for r in only_a)
         assert only_a[0]["status"] == "completed"
 
         everything = list_async_subagents()
