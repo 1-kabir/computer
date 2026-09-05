@@ -142,6 +142,7 @@ async def auth_middleware(request: Request, call_next):
         or path == "/api/config"
         or path == "/api/changelog"
         or path == "/manifest.json"
+        or path.startswith("/api/webhooks/")
     ):
         return await call_next(request)
     if path.startswith("/_app/") or path.startswith("/v1/") or not path.startswith("/api/"):
