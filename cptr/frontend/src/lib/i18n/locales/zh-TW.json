@@ -156,6 +156,8 @@
 	"memory.limits": "限制",
 	"memory.reviewEvery": "審查間隔",
 	"memory.userLimit": "使用者限制",
+	"memory.workspaceLimit": "工作區限制",
+	"memory.workspaceLimitHint": "覆寫此工作區的全域工作區限制。",
 	"memory.userMemory": "使用者記憶",
 	"general.title": "一般",
 	"general.theme": "佈景主題",

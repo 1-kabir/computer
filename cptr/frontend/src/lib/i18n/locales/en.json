@@ -198,6 +198,8 @@
 	"memory.limits": "Limits",
 	"memory.reviewEvery": "Review every",
 	"memory.userLimit": "User limit",
+	"memory.workspaceLimit": "Workspace limit",
+	"memory.workspaceLimitHint": "Overrides the global workspace limit for this workspace.",
 	"memory.userMemory": "User Memory",
 	"general.title": "General",
 	"general.theme": "Theme",

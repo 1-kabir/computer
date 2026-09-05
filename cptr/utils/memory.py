@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Request
+
 from cptr.env import DATA_DIR
 from cptr.models import Config
 from cptr.utils.runtime import FileError, Runtime
@@ -1000,27 +1001,62 @@ def apply_markdown_memory_batch(
     }
 
 
-async def get_memory_settings() -> dict[str, Any]:
+WORKSPACE_LIMIT_OVERRIDE_KEY = "memory.workspace_char_limit_overrides"
+CHAR_LIMIT_FLOOR = 250
+
+
+async def _workspace_limit_override(workspace: str) -> int:
+    """Return the per-workspace char limit override, or 0 when unset/invalid."""
+    try:
+        overrides = await Config.get(WORKSPACE_LIMIT_OVERRIDE_KEY)
+        if not isinstance(overrides, dict):
+            return 0
+        value = overrides.get(normalize_workspace_path(workspace))
+        return max(0, int(value)) if value is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+async def get_memory_settings(workspace: str = "") -> dict[str, Any]:
     settings = {**DEFAULT_MEMORY_SETTINGS}
     for key in DEFAULT_MEMORY_SETTINGS:
         value = await Config.get(f"memory.{key}")
         if value is not None:
             settings[key] = value
     settings["review_interval_turns"] = max(1, int(settings.get("review_interval_turns") or 10))
-    settings["user_char_limit"] = max(250, int(settings.get("user_char_limit") or 2000))
-    settings["workspace_char_limit"] = max(250, int(settings.get("workspace_char_limit") or 3000))
+    settings["user_char_limit"] = max(
+        CHAR_LIMIT_FLOOR, int(settings.get("user_char_limit") or 2000)
+    )
+    settings["workspace_char_limit"] = max(
+        CHAR_LIMIT_FLOOR, int(settings.get("workspace_char_limit") or 3000)
+    )
+    if workspace:
+        override = await _workspace_limit_override(workspace)
+        if override:
+            settings["workspace_char_limit"] = max(CHAR_LIMIT_FLOOR, override)
     return settings
 
 
-async def save_memory_settings(updates: dict[str, Any]) -> dict[str, Any]:
+async def save_memory_settings(updates: dict[str, Any], workspace: str = "") -> dict[str, Any]:
+    if workspace and "workspace_char_limit" in updates:
+        override = updates.pop("workspace_char_limit")
+        updates = {key: value for key, value in updates.items() if key != "workspace_char_limit"}
+        overrides = await Config.get(WORKSPACE_LIMIT_OVERRIDE_KEY)
+        overrides = dict(overrides) if isinstance(overrides, dict) else {}
+        key = normalize_workspace_path(workspace)
+        if override is None:
+            overrides.pop(key, None)
+        else:
+            overrides[key] = max(CHAR_LIMIT_FLOOR, int(override))
+        await Config.upsert({WORKSPACE_LIMIT_OVERRIDE_KEY: overrides if overrides else None})
     await Config.upsert(
         {f"memory.{key}": value for key, value in updates.items() if key in DEFAULT_MEMORY_SETTINGS}
     )
-    return await get_memory_settings()
+    return await get_memory_settings(workspace)
 
 
 async def resolve_memory_file(user_id: str, workspace: str, scope: str) -> MemoryFile:
-    settings = await get_memory_settings()
+    settings = await get_memory_settings(workspace)
     if scope == "user":
         return MemoryFile(
             path=user_memory_path(user_id),
@@ -1210,7 +1246,9 @@ async def write_memory(
                 "path": str(memory_file.path),
             }
         if scope == "workspace":
-            await Runtime.write_file(request, str(memory_file.path), format_memory_entries(next_entries))
+            await Runtime.write_file(
+                request, str(memory_file.path), format_memory_entries(next_entries)
+            )
         else:
             await asyncio.to_thread(write_memory_entries, memory_file.path, next_entries)
         return {
@@ -1230,14 +1268,14 @@ async def remember(
     scope: str,
     operations: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    settings = await get_memory_settings()
+    settings = await get_memory_settings(workspace)
     if not settings["enabled"]:
         return {"success": False, "error": "memory writes are disabled"}
     return await write_memory(request, user_id, workspace, scope, operations)
 
 
 async def read_memory_state(request: Request, user_id: str, workspace: str) -> dict[str, Any]:
-    settings = await get_memory_settings()
+    settings = await get_memory_settings(workspace)
     user_memory = await resolve_memory_file(user_id, workspace, "user")
     user_entries = await asyncio.to_thread(read_memory_entries, user_memory.path)
     workspace_entries: list[str] = []
@@ -1286,7 +1324,7 @@ async def recall_memory_context(
     budget_user: int | None = None,
     budget_workspace: int | None = None,
 ) -> MemoryContext:
-    settings = await get_memory_settings()
+    settings = await get_memory_settings(workspace)
     roots = resolve_memory_roots(user_id, workspace)
     query = _current_recall_query(current_message, recent_messages or [], mentioned_files or [])
     user_budget = int(budget_user or settings["user_char_limit"])
@@ -1342,7 +1380,7 @@ async def build_memory_prompt(
 ) -> str:
     if not user_id:
         return ""
-    settings = await get_memory_settings()
+    settings = await get_memory_settings(workspace)
     if not settings["enabled"]:
         return ""
     blocks: list[str] = []
@@ -1613,7 +1651,7 @@ async def review_memory_after_turn(
     model_connection: dict,
     model: str,
 ) -> None:
-    settings = await get_memory_settings()
+    settings = await get_memory_settings(workspace)
     if (
         not settings["enabled"]
         or not settings["tool_enabled"]

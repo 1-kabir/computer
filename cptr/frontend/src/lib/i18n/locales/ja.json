@@ -156,6 +156,8 @@
 	"memory.limits": "制限",
 	"memory.reviewEvery": "レビュー間隔",
 	"memory.userLimit": "ユーザー制限",
+	"memory.workspaceLimit": "ワークスペース制限",
+	"memory.workspaceLimitHint": "このワークスペースのグローバルなワークスペース制限を上書きします。",
 	"memory.userMemory": "ユーザーメモリ",
 	"general.title": "一般",
 	"general.theme": "テーマ",

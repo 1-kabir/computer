@@ -2165,7 +2165,7 @@ async def update_memory(
     request = __context__.get("request")
     if request is None:
         return json.dumps({"success": False, "error": "request context unavailable"})
-    settings = await get_memory_settings()
+    settings = await get_memory_settings(workspace)
     if not settings.get("tool_enabled", True):
         return json.dumps({"success": False, "error": "memory tool is disabled"})
 

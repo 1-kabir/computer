@@ -53,11 +53,11 @@ export type MemoryFile = {
 export const getMemory = (workspace: string) =>
 	fetchJSON<MemoryState>(`/api/memory?workspace=${encodeURIComponent(workspace || '')}`);
 
-export const updateMemorySettings = (settings: Partial<MemorySettings>) =>
+export const updateMemorySettings = (settings: Partial<MemorySettings>, workspace = '') =>
 	fetchJSON<{ settings: MemorySettings }>('/api/memory/config', {
 		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ settings })
+		body: JSON.stringify({ settings, workspace })
 	});
 
 export const updateMemory = (
