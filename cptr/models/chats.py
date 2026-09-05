@@ -234,25 +234,31 @@ class Chat(Base):
 
     @staticmethod
     async def unread_counts_by_workspace(
-        user_id: str, workspace_paths: list[str], active_chat_ids: set[str]
+        user_id: str,
+        workspace_paths: list[str],
+        active_chat_ids: set[str],
+        exclude_bridge: bool = False,
     ) -> dict[str, int]:
-        """Derive unread counts from chats; do not persist a second read-state."""
+        """Derive unread counts from chats; do not persist a second read-state.
+
+        When exclude_bridge is set, messaging-gateway chats (Discord, WhatsApp,
+        ...) are excluded so they don't light up workspace badges.
+        """
         paths = list(dict.fromkeys(path for path in workspace_paths if path))
         if not paths:
             return {}
 
         workspace = Chat.meta["workspace"].as_string()
-        statement = (
-            select(workspace, func.count(Chat.id))
-            .where(
-                Chat.user_id == user_id,
-                workspace.in_(paths),
-                Chat.meta["internal"].as_boolean().is_not(True),
-                Chat.meta["subagent"].as_boolean().is_not(True),
-                Chat.updated_at > func.coalesce(Chat.last_read_at, 0),
-            )
-            .group_by(workspace)
-        )
+        filters = [
+            Chat.user_id == user_id,
+            workspace.in_(paths),
+            Chat.meta["internal"].as_boolean().is_not(True),
+            Chat.meta["subagent"].as_boolean().is_not(True),
+            Chat.updated_at > func.coalesce(Chat.last_read_at, 0),
+        ]
+        if exclude_bridge:
+            filters.append(Chat.meta["bridge_bot_id"].is_(None))
+        statement = select(workspace, func.count(Chat.id)).where(*filters).group_by(workspace)
         if active_chat_ids:
             statement = statement.where(Chat.id.not_in(active_chat_ids))
 
@@ -589,7 +595,9 @@ class ChatMessage(Base):
         created_at: int = 0,
     ) -> ChatMessage:
         if isinstance(model, (list, tuple)):
-            model = next((item.strip() for item in model if isinstance(item, str) and item.strip()), None)
+            model = next(
+                (item.strip() for item in model if isinstance(item, str) and item.strip()), None
+            )
         elif model is not None and not isinstance(model, str):
             model = str(model)
 

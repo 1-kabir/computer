@@ -22,7 +22,13 @@
 		type Tab
 	} from '$lib/stores';
 	import { openChatTab } from '$lib/stores';
-	import { chatEnabled, chatStatuses, isChatUnread, streamingChatTabs } from '$lib/stores/chat';
+	import {
+		chatEnabled,
+		chatStatuses,
+		isChatUnread,
+		bridgeNotificationsMuted,
+		streamingChatTabs
+	} from '$lib/stores/chat';
 	import { voiceMemosEnabled, showVoiceMemo } from '$lib/stores/audio';
 	import { keybindings, formatChord } from '$lib/stores/keybindings';
 	import Icon from './Icon.svelte';
@@ -440,7 +446,7 @@
 					<span class="max-w-30 overflow-hidden text-ellipsis">
 						{tab.type === 'files' ? ($activeWorkspace?.name ?? $t('bar.files')) : tab.label}
 					</span>
-					{#if tab.type === 'chat' && !isActive && isChatUnread(chatStatus)}
+					{#if tab.type === 'chat' && !isActive && isChatUnread(chatStatus) && !($bridgeNotificationsMuted && chatStatus?.bridge)}
 						<span class="size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden="true"></span>
 					{/if}
 					{#if tab.unsaved}<span class="w-1.5 h-1.5 rounded-full bg-gray-400 shrink-0"></span>{/if}

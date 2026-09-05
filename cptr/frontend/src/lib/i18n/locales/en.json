@@ -551,6 +551,8 @@
 	"general.browserNotifications": "Browser notifications",
 	"general.browserNotificationsDesc": "Show OS-level notifications when a task completes and the tab is not focused.",
 	"general.notificationSound": "Notification sound",
+	"general.bridgeNotificationsMuted": "Mute messaging gateway alerts",
+	"general.bridgeNotificationsMutedDesc": "Don't show toasts, browser notifications, or unread indicators for conversations from messaging gateways like Discord or WhatsApp.",
 	"general.notificationPermissionDenied": "Browser notification permission denied",
 	"general.notificationTargets": "Notification targets",
 	"general.addNotificationTarget": "Add notification target",
