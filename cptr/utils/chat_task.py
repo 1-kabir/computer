@@ -11,7 +11,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from cptr.events import EVENTS, publish_event
 from cptr.env import CHAT_MAX_ITERATIONS, CHAT_TOOL_COMMAND_MAX_CHARS, CHAT_TOOL_MAX_CHARS
@@ -359,6 +359,42 @@ _task_state: dict[str, dict] = {}  # message_id → {content, output}
 _task_chat: dict[str, str] = {}  # message_id → chat_id
 _pending_input_locks: dict[str, asyncio.Lock] = {}  # chat_id → Lock
 
+# Observers notified whenever a task starts for a chat. The bridge registers
+# one so tasks spawned outside _dispatch_task (e.g. pending-input batches
+# dequeued by process_pending_chat_inputs) still get a delivery watcher —
+# without this, a queued batch's reply is saved to the DB but never reaches
+# the messaging platform.
+_task_watchers: list[Callable[[str, str], None]] = []
+
+
+def on_task_started(callback: Callable[[str, str], None]) -> Callable[[], None]:
+    """Register a callback(chat_id, message_id) fired for every started task.
+
+    Returns an unregister function. Callbacks run synchronously in the event
+    loop; they must not raise (exceptions are logged and swallowed).
+    """
+    _task_watchers.append(callback)
+
+    def _unregister():
+        try:
+            _task_watchers.remove(callback)
+        except ValueError:
+            pass
+
+    return _unregister
+
+
+def _notify_task_watchers(chat_id: str, message_id: str) -> None:
+    for callback in _task_watchers:
+        try:
+            callback(chat_id, message_id)
+        except Exception:
+            logger.exception(
+                "[task-watcher] observer failed for chat %s message %s",
+                chat_id[:8],
+                message_id[:8],
+            )
+
 
 def get_pending_input_lock(chat_id: str) -> asyncio.Lock:
     return _pending_input_locks.setdefault(chat_id, asyncio.Lock())
@@ -401,6 +437,7 @@ def start_task(
     )
     _tasks[message_id] = task
     _task_chat[message_id] = chat_id
+    _notify_task_watchers(chat_id, message_id)
 
     async def emit_active():
         from cptr.models.users import UserStates

@@ -15,12 +15,16 @@ Configure the webhook URL in Meta's WhatsApp dashboard as:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from collections import deque
+from pathlib import Path
 from typing import Optional
 
 import httpx
 
+from cptr.env import DATA_DIR
 from cptr.utils.bridge import Attachment, BaseAdapter, MessageEvent, chunk_message
 
 logger = logging.getLogger(__name__)
@@ -59,7 +63,36 @@ class WhatsAppAdapter(BaseAdapter):
         # read-receipt / typing-indicator endpoint.
         self._last_inbound_message_id: Optional[str] = None
         # Recent inbound ids for redelivery dedupe (Meta retries webhooks).
+        # Persisted to the data dir so a restart/reconnect doesn't reprocess
+        # Meta's redeliveries as new inbound messages (the "phantom message"
+        # bug). Kept bounded and trimmed lazily.
         self._seen_message_ids: deque[str] = deque(maxlen=256)
+        self._seen_ids_path = (
+            Path(DATA_DIR) / "bridge" / f"whatsapp_seen_{bot_id or 'default'}.json"
+        )
+        self._load_seen_ids()
+        # Drop inbound messages older than this at receipt time (seconds).
+        # Meta redelivers old webhooks; without a staleness guard a
+        # redelivered message from hours ago re-enters the conversation.
+        self._max_inbound_age = 300.0
+
+    def _load_seen_ids(self) -> None:
+        """Restore persisted seen-message ids so restarts keep deduping."""
+        try:
+            if self._seen_ids_path.is_file():
+                data = json.loads(self._seen_ids_path.read_text())
+                if isinstance(data, list):
+                    for mid in data[-self._seen_message_ids.maxlen :]:
+                        self._seen_message_ids.append(str(mid))
+        except Exception:
+            logger.debug("[whatsapp] failed to load seen ids", exc_info=True)
+
+    def _save_seen_ids(self) -> None:
+        try:
+            self._seen_ids_path.parent.mkdir(parents=True, exist_ok=True)
+            self._seen_ids_path.write_text(json.dumps(list(self._seen_message_ids)))
+        except Exception:
+            logger.debug("[whatsapp] failed to persist seen ids", exc_info=True)
 
     # ── Lifecycle ──────────────────────────────────────────
 
@@ -108,11 +141,26 @@ class WhatsAppAdapter(BaseAdapter):
                 value = change.get("value", {})
                 for message in value.get("messages", []):
                     msg_id = message.get("id", "")
+                    # Staleness guard: Meta redelivers old webhooks (retries,
+                    # reconnects). Drop anything older than the cutoff unless
+                    # the webhook omitted a timestamp.
+                    try:
+                        msg_ts = int(message.get("timestamp", "0"))
+                    except (TypeError, ValueError):
+                        msg_ts = 0
+                    if msg_ts and (time.time() - msg_ts) > self._max_inbound_age:
+                        logger.info(
+                            "[whatsapp] Dropping stale inbound message %s (%.0fs old)",
+                            msg_id or "?",
+                            time.time() - msg_ts,
+                        )
+                        continue
                     if msg_id:
                         if msg_id in self._seen_message_ids:
-                            logger.debug("[whatsapp] Dropping redelivered message %s", msg_id)
+                            logger.info("[whatsapp] Dropping redelivered message %s", msg_id)
                             continue
                         self._seen_message_ids.append(msg_id)
+                        self._save_seen_ids()
                     self._last_inbound_message_id = msg_id or None
                     msg_type = message.get("type", "")
 
@@ -205,6 +253,7 @@ class WhatsAppAdapter(BaseAdapter):
                         sender_name=sender_name,
                         text=text,
                         attachments=attachments,
+                        platform_message_id=msg_id or None,
                     )
                     await self._message_queue.put(event)
 
@@ -265,7 +314,7 @@ class WhatsAppAdapter(BaseAdapter):
         )
 
     async def send_typing(self, chat_id: str) -> None:
-        """Mark the last inbound message read and show a typing indicator.
+        """Mark the newest inbound message read and show a typing indicator.
 
         Cloud API syntax (Graph >= v23.0): POST /{phone_number_id}/messages
         with {status: "read", message_id: <inbound wamid>,
@@ -274,20 +323,35 @@ class WhatsAppAdapter(BaseAdapter):
         periodically is the intended usage.  Requires a real inbound message
         id — silently skip before any inbound message was seen.
         """
-        if not self._http or not self._last_inbound_message_id:
+        await self._post_status(self._last_inbound_message_id, typing=True)
+
+    async def mark_read(self, chat_id: str, message_id: str | None = None) -> None:
+        """Blue-tick a specific inbound message (read receipt, no indicator)."""
+        await self._post_status(message_id or self._last_inbound_message_id, typing=False)
+
+    async def _post_status(self, message_id: str | None, *, typing: bool) -> None:
+        if not self._http or not message_id:
             return
+        body: dict = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+        }
+        if typing:
+            body["typing_indicator"] = {"type": "text"}
         try:
-            await self._http.post(
+            resp = await self._http.post(
                 f"{API_BASE}/{self._phone_number_id}/messages",
-                json={
-                    "messaging_product": "whatsapp",
-                    "status": "read",
-                    "message_id": self._last_inbound_message_id,
-                    "typing_indicator": {"type": "text"},
-                },
+                json=body,
             )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[whatsapp] status POST failed: %s %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
         except Exception:
-            pass
+            logger.debug("[whatsapp] status POST error", exc_info=True)
 
     # ── Media ──────────────────────────────────────────────
 

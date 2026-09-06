@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -25,8 +26,10 @@ _current_bot_manager: "BotManager | None" = None
 # How often to edit the streaming message (seconds).
 STREAM_EDIT_INTERVAL = 2.0
 
-# Typing indicator refresh interval (seconds).
-TYPING_INTERVAL = 5.0
+# Typing indicator refresh interval for send-only platforms (seconds).
+# WhatsApp's indicator auto-dismisses after 25s; refreshing every 20s keeps
+# it alive during long generation without hammering the Graph API per poll.
+TYPING_INTERVAL = 20.0
 
 
 # ── Adapter interface ────────────────────────────────────────
@@ -52,6 +55,7 @@ class MessageEvent:
     sender_name: str  # Display name
     text: str  # Message content
     attachments: list[Attachment] = field(default_factory=list)
+    platform_message_id: str | None = None  # Platform's message id (e.g. WhatsApp wamid)
 
 
 class BaseAdapter(ABC):
@@ -257,6 +261,68 @@ class BotManager:
         self._stream_tasks: dict[str, asyncio.Task] = {}  # key → streaming task
         _current_bot_manager = self
 
+        # Watch every task started anywhere in the app: when the chat belongs
+        # to one of our bots, attach a delivery watcher. This is what makes
+        # dequeued pending-input batches (processed by chat_task after the
+        # original task finishes) actually deliver their replies to the
+        # platform — _dispatch_task only covers the triggering message.
+        from cptr.utils.chat_task import on_task_started
+
+        self._unregister_task_watcher = on_task_started(self._on_task_started)
+
+    def _on_task_started(self, chat_id: str, message_id: str) -> None:
+        """Attach a _stream_loop for tasks started outside _dispatch_task.
+
+        Called synchronously from start_task; spawns the watcher as its own
+        task so the caller is never blocked on DB lookups.
+        """
+        try:
+            self._stream_tasks[f"watcher:{chat_id}:{message_id}"] = asyncio.create_task(
+                self._attach_watcher(chat_id, message_id)
+            )
+        except Exception:
+            logger.exception("[bridge] failed to spawn watcher for chat %s", chat_id[:8])
+
+    async def _attach_watcher(self, chat_id: str, message_id: str) -> None:
+        """Resolve bot+thread for a chat and start a delivery loop if it's ours."""
+        try:
+            from cptr.models import Chat
+            from cptr.utils.db import get_db
+            from sqlalchemy import select
+
+            async with await get_db() as db:
+                row = (
+                    await db.execute(select(Chat).where(Chat.id == chat_id))
+                ).scalar_one_or_none()
+            if not row:
+                return
+            meta = row.meta or {}
+            bot_id = meta.get("bridge_bot_id")
+            platform_chat_id = meta.get("bridge_external_thread_id")
+            if not bot_id or not platform_chat_id:
+                return
+            adapter = self._adapters.get(bot_id)
+            if not adapter:
+                return
+            bot = next((b for b in await get_bot_configs() if b.get("id") == bot_id), None)
+            if not bot:
+                return
+            # Skip if _dispatch_task already has a live loop for this thread
+            # watching this exact message id (it would double-deliver).
+            stream_key = f"{bot_id}:{platform_chat_id}"
+            existing = self._stream_tasks.get(stream_key)
+            if existing and not existing.done():
+                return
+            self._stream_tasks[stream_key] = asyncio.create_task(
+                self._stream_loop(adapter, platform_chat_id, None, message_id, bot)
+            )
+            logger.info(
+                "[bridge] attached delivery watcher for task in chat %s (dequeued batch)",
+                chat_id[:8],
+            )
+        except Exception:
+            logger.exception("[bridge] _attach_watcher failed for chat %s", chat_id[:8])
+
     # ── Lifecycle ──────────────────────────────────────────
 
     async def start_all(self) -> None:
@@ -391,6 +457,18 @@ class BotManager:
             return
 
         adapter = self._adapters.get(bot["id"])
+
+        # Blue-tick this specific inbound message as soon as processing starts
+        # (per-message, so batched messages all get receipts — not just the
+        # newest one the adapter's "last inbound" pointer knows about).
+        if adapter and event.platform_message_id:
+            try:
+                mark_read = getattr(adapter, "mark_read", None)
+                if mark_read:
+                    await mark_read(event.chat_id, event.platform_message_id)
+            except Exception:
+                logger.debug("[bridge] read receipt failed", exc_info=True)
+
         text = (event.text or "").strip()
 
         # Normalize: strip Discord bot mention prefix (<@123456>)
@@ -880,6 +958,7 @@ class BotManager:
         is_telegram = bot["platform"] == "telegram"
         # Send-only platform: never edit, never send a placeholder.
         use_send_only = not adapter.supports_edit
+        _last_typing_ts = 0.0  # fire immediately on the first poll tick
 
         # Telegram: use draft-based streaming
         draft_id: int | None = None
@@ -925,11 +1004,18 @@ class BotManager:
                 display = "\n\n".join(display_parts).strip()
 
                 if use_send_only:
-                    # Send-only platform: no in-place streaming.  The typing
-                    # indicator below refreshes every poll (WhatsApp's
-                    # indicator auto-dismisses after 25s, so re-sending is
-                    # correct behavior, not spam).
-                    pass
+                    # Send-only platform (WhatsApp): no in-place streaming.
+                    # Refresh the typing indicator periodically — the WhatsApp
+                    # indicator auto-dismisses after 25s, so a refresh below
+                    # the API's lifetime keeps it alive during long generation
+                    # without spamming the Graph API on every 2s poll tick.
+                    now_mono = time.monotonic()
+                    if now_mono - _last_typing_ts >= TYPING_INTERVAL:
+                        try:
+                            await adapter.send_typing(platform_chat_id)
+                            _last_typing_ts = now_mono
+                        except Exception:
+                            logger.debug("[bridge] typing indicator refresh failed", exc_info=True)
                 elif display and display != last_sent:
                     display = display[:max_len]
 
@@ -947,13 +1033,13 @@ class BotManager:
                         except Exception:
                             pass
 
-                elif not display and not last_sent or use_send_only:
-                    # Typing indicator while nothing visible yet — and on
-                    # send-only platforms, continuously (the WhatsApp
-                    # indicator auto-dismisses after 25s, so refresh it).
+                elif not display and not last_sent:
+                    # Edit-capable platforms: typing indicator while nothing
+                    # visible yet (placeholder/draft handles the rest).
                     if not use_draft:
                         try:
                             await adapter.send_typing(platform_chat_id)
+                            _last_typing_ts = time.monotonic()
                         except Exception:
                             pass
 
