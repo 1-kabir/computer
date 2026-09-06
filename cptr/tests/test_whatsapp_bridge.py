@@ -17,13 +17,12 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 
 import httpx
-import pytest
 
 from cptr.utils.adapters.whatsapp import WhatsAppAdapter
-from cptr.utils.bridge import BotManager, BaseAdapter, chunk_message
-
+from cptr.utils.bridge import BaseAdapter, BotManager, chunk_message
 
 # ── Fakes ────────────────────────────────────────────────────
 
@@ -126,10 +125,15 @@ def test_api_version_supports_typing_indicators():
 
 
 def _webhook_payload(msg_id: str, msg_type: str = "text", extra: dict | None = None):
+    import time as _time
+
     message = {
         "from": "15551234567",
         "id": msg_id,
-        "timestamp": "1",
+        # Fresh timestamp, matching a live Meta delivery. (The staleness
+        # guard drops webhooks older than ~5 minutes; tests use a distinct
+        # old-timestamp payload to verify that behavior explicitly.)
+        "timestamp": str(int(_time.time())),
         "type": msg_type,
         "text": {"body": "hi"},
     }
@@ -366,3 +370,237 @@ def test_signature_verification_roundtrip():
     assert _verify_whatsapp_signature(body, "sha256=" + "0" * 64, secret) is False
     assert _verify_whatsapp_signature(body, None, secret) is False
     assert _verify_whatsapp_signature(body, "sha256=deadbeef", secret) is False
+
+
+# ── Typing refresh on send-only platforms (the dead-branch bug) ──
+
+
+def test_send_only_platform_sends_typing(monkeypatch):
+    """Send-only adapters must get typing indicator calls (was unreachable)."""
+    adapter = _FakeAdapter(supports_edit=False)
+
+    _run_stream_loop(adapter, monkeypatch, "Hello final reply")
+
+    assert adapter.typing_calls >= 1, "send-only platform never got a typing indicator"
+    assert adapter.sent == ["Hello final reply"]  # reply still delivered once
+
+
+def test_send_only_typing_refresh_throttled(monkeypatch):
+    """Typing refreshes respect TYPING_INTERVAL, not one per 2s poll tick."""
+    import cptr.utils.bridge as bridge_mod
+
+    adapter = _FakeAdapter(supports_edit=False)
+
+    # Simulate a long task: not done on the first calls, done on the last.
+    calls = {"n": 0}
+
+    class _SlowTask:
+        def done(self):
+            calls["n"] += 1
+            return calls["n"] > 12  # ~12 polls
+
+    from cptr.models import ChatMessage
+    from cptr.utils import chat_task
+
+    monkeypatch.setattr(chat_task, "_tasks", {"msg1": _SlowTask()})
+    monkeypatch.setattr(chat_task, "_task_state", {"msg1": {"content": "", "output": []}})
+
+    class _FakeMsg:
+        content = "final"
+
+    async def _get_by_id(mid):
+        return _FakeMsg()
+
+    monkeypatch.setattr(ChatMessage, "get_by_id", _get_by_id)
+
+    monkeypatch.setattr(bridge_mod, "STREAM_EDIT_INTERVAL", 0.0)  # no real sleeping
+    bot = {
+        "id": "bot1",
+        "platform": adapter.platform,
+        "user_id": "u",
+        "workspace": "w",
+        "model_id": "m",
+    }
+    manager = BotManager.__new__(BotManager)
+    asyncio.run(manager._stream_loop(adapter, "chat1", None, "msg1", bot))
+
+    # 13 ticks over ~0s wall time → throttle must cap typing calls far below
+    # the tick count (previously the code path fired every tick or never).
+    assert adapter.typing_calls <= 2, f"typing fired {adapter.typing_calls}x — throttle broken"
+
+
+# ── Staleness guard + persisted dedupe ───────────────────────
+
+
+def test_stale_inbound_message_dropped():
+    """A webhook redelivery of an hours-old message must not become an event."""
+    import time as _time
+
+    adapter, _ = _make_adapter()
+    events: list = []
+
+    async def _on_message(event):
+        events.append(event)
+
+    adapter.on_message = _on_message
+    stale = int(_time.time()) - 3600  # 1h old
+    payload = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "messages": [
+                                {
+                                    "from": "15551234567",
+                                    "id": "wamid.STALE1",
+                                    "timestamp": str(stale),
+                                    "type": "text",
+                                    "text": {"body": "phantom hey"},
+                                }
+                            ],
+                            "contacts": [{"wa_id": "15551234567", "profile": {"name": "K"}}],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+    _run_webhooks(adapter, [payload])
+    assert events == [], "stale redelivered message was re-imported"
+
+
+def test_seen_ids_persist_across_reinstants(monkeypatch):
+    """Dedup state must survive adapter restart (persisted to data dir)."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        monkeypatch.setattr("cptr.utils.adapters.whatsapp.DATA_DIR", Path(tmp))
+        seen_path = Path(tmp) / "bridge" / "whatsapp_seen_b1.json"
+
+        adapter1, _ = _make_adapter()
+        adapter1._seen_ids_path = seen_path
+        fresh = str(int(time.time()))
+        payload = _webhook_payload("wamid.PERSIST1")
+        payload["entry"][0]["changes"][0]["value"]["messages"][0]["timestamp"] = fresh
+        _run_webhooks(adapter1, [payload])
+        adapter1._save_seen_ids()
+        assert seen_path.is_file(), "seen ids were not persisted"
+
+        # "Restart": a new adapter instance loads the persisted ids
+        adapter2, _ = _make_adapter()
+        adapter2._seen_ids_path = seen_path
+        adapter2._load_seen_ids()
+        assert "wamid.PERSIST1" in adapter2._seen_message_ids
+
+        # Redelivery of the same id after restart is dropped
+        events: list = []
+
+        async def _on_message(event):
+            events.append(event)
+
+        adapter2.on_message = _on_message
+        _run_webhooks(adapter2, [payload])
+        assert events == [], "redelivered message processed after restart"
+
+
+def test_typing_without_inbound_is_noop():
+    """send_typing/mark_read before any inbound message must not POST."""
+    adapter, http = _make_adapter()
+    adapter._last_inbound_message_id = None
+    asyncio.run(adapter.send_typing("chat1"))
+    asyncio.run(adapter.mark_read("chat1"))
+    assert http.calls == []
+
+
+def test_mark_read_explicit_message_id():
+    """mark_read uses the given wamid (per-message receipts), not just last."""
+    adapter, http = _make_adapter()
+    adapter._last_inbound_message_id = "wamid.OLD"
+    asyncio.run(adapter.mark_read("chat1", "wamid.NEW"))
+    assert http.calls[-1]["json"]["message_id"] == "wamid.NEW"
+    assert "typing_indicator" not in http.calls[-1]["json"]
+
+
+# ── Task-watcher (dequeued batch delivery) ───────────────────
+
+
+def test_task_watcher_registered_and_fires():
+    """on_task_started registers, fires per start_task, and unregisters."""
+    from cptr.utils import chat_task
+
+    seen: list[tuple[str, str]] = []
+    unregister = chat_task.on_task_started(lambda cid, mid: seen.append((cid, mid)))
+    try:
+        chat_task._notify_task_watchers("chat-abc", "msg-123")
+        chat_task._notify_task_watchers("chat-abc", "msg-456")
+        assert seen == [("chat-abc", "msg-123"), ("chat-abc", "msg-456")]
+    finally:
+        unregister()
+    chat_task._notify_task_watchers("chat-abc", "msg-789")
+    assert seen == [("chat-abc", "msg-123"), ("chat-abc", "msg-456")]
+
+
+def test_task_watcher_swallows_observer_exceptions():
+    """A raising observer must not break start_task or other observers."""
+    from cptr.utils import chat_task
+
+    ok_calls: list[str] = []
+
+    def _boom(cid, mid):
+        raise RuntimeError("observer exploded")
+
+    unregister = chat_task.on_task_started(_boom)
+    try:
+        chat_task.on_task_started(lambda cid, mid: ok_calls.append(mid))
+        chat_task._notify_task_watchers("chat-abc", "msg-123")  # must not raise
+        assert ok_calls == ["msg-123"]
+    finally:
+        unregister()
+
+
+def test_start_task_notifies_watchers(monkeypatch):
+    """start_task itself fires the watcher (this is the C-fix hook)."""
+    import asyncio as _aio
+
+    from cptr.utils import chat_task
+
+    seen: list[tuple[str, str]] = []
+    unregister = chat_task.on_task_started(lambda cid, mid: seen.append((cid, mid)))
+    try:
+        created: dict = {}
+
+        class _FakeTaskObj:
+            def done(self):
+                return False
+
+        def _fake_create_task(coro):
+            created["coro"] = coro
+            return _FakeTaskObj()
+
+        async def _never_finish(*args, **kwargs):
+            await _aio.sleep(3600)
+
+        monkeypatch.setattr(chat_task.asyncio, "create_task", _fake_create_task)
+        monkeypatch.setattr(chat_task, "run_chat_task", _never_finish)
+
+        async def _scenario():
+            chat_task.start_task(
+                request=None,
+                message_id="mid-1",
+                chat_id="cid-1",
+                user_id="u1",
+                workspace="w1",
+                connection={"id": "x"},
+            )
+
+        _aio.run(_scenario())
+        coro = created.get("coro")
+        if coro is not None:
+            coro.close()  # don't leave the never-ending coroutine pending
+        chat_task._tasks.pop("mid-1", None)
+        chat_task._task_chat.pop("mid-1", None)
+        assert seen == [("cid-1", "mid-1")]
+    finally:
+        unregister()
