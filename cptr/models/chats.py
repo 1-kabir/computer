@@ -275,7 +275,12 @@ class Chat(Base):
             Chat.updated_at > func.coalesce(Chat.last_read_at, 0),
         ]
         if exclude_bridge:
-            filters.append(Chat.meta["bridge_bot_id"].is_(None))
+            # NOTE: Chat.meta["bridge_bot_id"].is_(None) is WRONG here — the
+            # SQLite dialect wraps JSON access in JSON_QUOTE, and a MISSING key
+            # becomes the 4-char string 'null', never SQL NULL, so every normal
+            # chat would be filtered out (mute would invert the counts).
+            # json_type() returns SQL NULL for an absent path.
+            filters.append(func.json_type(Chat.meta, "$.bridge_bot_id").is_(None))
         statement = select(workspace, func.count(Chat.id)).where(*filters).group_by(workspace)
         if active_chat_ids:
             statement = statement.where(Chat.id.not_in(active_chat_ids))

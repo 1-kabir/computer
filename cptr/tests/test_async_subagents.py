@@ -96,3 +96,46 @@ def test_cancel_running_subagent_marks_interrupted():
         assert await cancel_async_subagent(delegation_id) is False
 
     asyncio.run(scenario())
+
+
+def test_list_snapshot_is_json_encodable_for_running_subagent():
+    """Regression: a RUNNING subagent's record held a live asyncio.Task under
+    'task', so FastAPI's encoder raised and GET /api/chats/{id}/subagents
+    500'd — silently killing the subagents bar. The snapshot must encode, and
+    'task' must carry the human-readable description.
+    """
+    from fastapi.encoders import jsonable_encoder
+
+    async def scenario():
+        reserve = await reserve_async_subagent(
+            20,
+            parent_chat_id="chat-json",
+            user_id="u",
+            task="Count the files in /tmp",
+            request=None,
+            context="",
+            workspace="",
+            model="m",
+        )
+        started = asyncio.Event()
+
+        async def _runner():
+            started.set()
+            await asyncio.sleep(5)
+
+        await start_async_subagent(reserve["delegation_id"], _runner)
+        await started.wait()
+        await asyncio.sleep(0.05)
+
+        snap = list_async_subagents("chat-json")
+        assert snap, "running subagent missing from snapshot"
+        rec = snap[0]
+        assert rec["status"] in {"starting", "running"}
+        assert rec["task"] == "Count the files in /tmp"
+        # THE actual failure mode — must not raise:
+        encoded = jsonable_encoder(snap)
+        assert encoded[0]["task"] == "Count the files in /tmp"
+
+        await cancel_async_subagent(reserve["delegation_id"], "test cleanup")
+
+    asyncio.run(scenario())

@@ -25,6 +25,22 @@
 		load();
 	});
 
+	// Reload when the underlying workspace changes: otherwise settings loaded
+	// for one workspace could be saved as another workspace's override if the
+	// user switched workspaces while this panel stayed mounted.
+	let initializedWorkspace = $state<string | null>(null);
+	$effect(() => {
+		if (initializedWorkspace === null) {
+			// initial load happens in onMount; just record the starting workspace
+			initializedWorkspace = workspace;
+			return;
+		}
+		if (initializedWorkspace !== workspace) {
+			initializedWorkspace = workspace;
+			void load();
+		}
+	});
+
 	async function load() {
 		loading = true;
 		try {

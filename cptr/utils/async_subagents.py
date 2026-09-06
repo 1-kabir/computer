@@ -61,7 +61,12 @@ async def reserve_async_subagent(max_async: int, **record: Any) -> dict[str, Any
             "status": "starting",
             "dispatched_at": now,
             "completed_at": None,
-            "task": None,
+            # The human-readable task description (UI-facing). Kept under a
+            # dedicated key — "task" was previously clobbered to None here and
+            # then reused for the live asyncio runner handle, which leaked a
+            # non-serializable Task into the subagents API payload.
+            "task_description": record.get("task"),
+            "runner_task": None,
             "error": None,
             "summary": None,
         }
@@ -114,7 +119,7 @@ async def start_async_subagent(
     async with _lock:
         record = _records.get(delegation_id)
         if record:
-            record["task"] = task
+            record["runner_task"] = task
             parent_chat_id = record.get("parent_chat_id")
             user_id = record.get("user_id")
 
@@ -129,9 +134,9 @@ async def cancel_all_async_subagents(reason: str = "shutdown") -> int:
     """Cancel all running background subagents."""
     async with _lock:
         tasks = [
-            r.get("task")
+            r.get("runner_task")
             for r in _records.values()
-            if r.get("status") in {"starting", "running"} and r.get("task")
+            if r.get("status") in {"starting", "running"} and r.get("runner_task")
         ]
     count = 0
     for task in tasks:
@@ -147,7 +152,7 @@ async def cancel_async_subagent(delegation_id: str, reason: str = "user request"
     """Cancel a single running background subagent. Returns True if cancelled."""
     async with _lock:
         record = _records.get(delegation_id)
-        task = record.get("task") if record else None
+        task = record.get("runner_task") if record else None
         if not record or record.get("status") not in {"starting", "running"}:
             return False
     if task and not task.done():
@@ -159,7 +164,7 @@ async def cancel_async_subagent(delegation_id: str, reason: str = "user request"
 
 _SERIALIZABLE_RECORD_FIELDS = (
     "delegation_id",
-    "task",
+    "task_description",
     "context",
     "workspace",
     "parent_chat_id",
@@ -179,13 +184,16 @@ _SERIALIZABLE_RECORD_FIELDS = (
 def _serialize_record(record: dict[str, Any]) -> dict[str, Any]:
     """JSON-safe projection of a record.
 
-    Records hold live runtime objects (the Starlette Request, the runner task,
-    the connection handle) that must never reach an HTTP response or socket
-    payload: FastAPI's encoder recurses into them and dies with RecursionError
-    (observed as HTTP 500 on GET /api/chats/{id}/subagents), which silently
-    killed the subagents bar. Whitelist instead of blocklist.
+    Records hold live runtime objects (the Starlette Request, the runner
+    asyncio.Task, the connection handle) that must never reach an HTTP
+    response or socket payload: FastAPI's encoder dies on them (observed as
+    HTTP 500 on GET /api/chats/{id}/subagents, which silently killed the
+    subagents bar). Whitelist instead of blocklist — and map the UI-facing
+    "task" name to the internal task_description key.
     """
-    return {k: record[k] for k in _SERIALIZABLE_RECORD_FIELDS if k in record}
+    out = {k: record[k] for k in _SERIALIZABLE_RECORD_FIELDS if k in record}
+    out["task"] = record.get("task_description")
+    return out
 
 
 def list_async_subagents(parent_chat_id: str | None = None) -> list[dict[str, Any]]:

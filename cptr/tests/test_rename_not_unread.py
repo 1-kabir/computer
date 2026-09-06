@@ -109,3 +109,46 @@ def test_rename_never_read_chat_gets_read_stamp():
         assert await _is_unread("chat-null") is False
 
     asyncio.run(scenario())
+
+
+def test_exclude_bridge_counts_normal_chats_when_muted():
+    """Regression: the exclude_bridge filter used is_(None) on a JSON path,
+    which SQLite dialects wrap in JSON_QUOTE — a MISSING key becomes the
+    string 'null', never SQL NULL, so every normal chat was excluded and the
+    mute inverted the unread counts. Must use json_type()."""
+
+    async def scenario():
+        from sqlalchemy import select, func
+
+        async with await get_db() as db:
+            db.add(
+                Chat(
+                    id="muted-bridge",
+                    user_id=USER,
+                    title="bridge chat",
+                    meta={**CHAT_META, "bridge_bot_id": "bot1"},
+                    updated_at=2_000,
+                    last_read_at=1_000,
+                    created_at=1_000,
+                )
+            )
+            db.add(
+                Chat(
+                    id="muted-normal",
+                    user_id=USER,
+                    title="normal chat",
+                    meta=dict(CHAT_META),  # no bridge_bot_id key at all
+                    updated_at=2_000,
+                    last_read_at=1_000,
+                    created_at=1_000,
+                )
+            )
+            await db.commit()
+
+        counts = await Chat.unread_counts_by_workspace(USER, [WS], set(), exclude_bridge=True)
+        assert counts == {WS: 1}, f"expected only the normal chat counted, got {counts}"
+
+        counts_off = await Chat.unread_counts_by_workspace(USER, [WS], set(), exclude_bridge=False)
+        assert counts_off == {WS: 2}
+
+    asyncio.run(scenario())
