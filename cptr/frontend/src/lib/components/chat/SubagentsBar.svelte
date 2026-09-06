@@ -18,13 +18,17 @@
 		subagents.filter((s) => s.status === 'starting' || s.status === 'running')
 	);
 	const runningCount = $derived(running.length);
-	const totalCount = $derived(subagents.length);
+	// The bar is an ACTIVE-work surface: list only starting/running delegations.
+	// Finished ones drop off (their transcript lives in the subagent chat) so the
+	// list doesn't pile up rows the user can no longer act on.
+	const totalCount = $derived(running.length);
 
-	function statusIcon(status: SubagentInfo['status']): 'spin' | 'check' | 'dash' | 'x' {
-		if (status === 'starting' || status === 'running') return 'spin';
-		if (status === 'completed') return 'check';
+	function statusIcon(status: SubagentInfo['status']): 'spin' | 'dash' | 'x' {
+		// Bar only lists active delegations; interrupted/error get their marks,
+		// everything else spins until it resolves.
 		if (status === 'interrupted') return 'dash';
-		return 'x';
+		if (status === 'error') return 'x';
+		return 'spin';
 	}
 
 	async function openSubagent(subagent: SubagentInfo) {
@@ -55,19 +59,11 @@
 	<div class="app-subtle-surface my-1 overflow-hidden rounded-3xl border shadow-sm">
 		<div class="flex items-center justify-between px-3.5 pt-1.5 pb-1">
 			<div class="app-muted flex min-w-0 items-center gap-2 text-xs">
-				{#if runningCount > 0}
-					<span
-						class="size-3 rounded-full border-2 border-current border-t-transparent opacity-70 animate-spin"
-					></span>
-				{:else}
-					<Icon name="check" size={14} />
-				{/if}
+				<span
+					class="size-3 rounded-full border-2 border-current border-t-transparent opacity-70 animate-spin"
+				></span>
 				<span class="truncate">
-					{#if runningCount > 0}
-						{$t('chat.subagentsRunning', { count: runningCount })}
-					{:else}
-						{$t('chat.subagentsAllDone', { count: totalCount })}
-					{/if}
+					{$t('chat.subagentsRunning', { count: runningCount })}
 				</span>
 			</div>
 			<button
@@ -82,7 +78,7 @@
 
 		{#if !collapsed}
 			<div class="space-y-1 px-2.5 pb-3">
-				{#each subagents as subagent (subagent.delegation_id)}
+				{#each running as subagent (subagent.delegation_id)}
 					<div class="flex items-start gap-2 rounded-2xl px-1 py-0.5 text-xs">
 						<span class="app-muted mt-0.5 flex size-3.5 shrink-0 items-center justify-center">
 							{#if cancelling.has(subagent.delegation_id)}
@@ -93,21 +89,13 @@
 								<span
 									class="size-3 rounded-full border-2 border-current border-t-transparent opacity-70 animate-spin"
 								></span>
-							{:else if statusIcon(subagent.status) === 'check'}
-								<Icon name="check" size={14} strokeWidth={2.5} />
 							{:else if statusIcon(subagent.status) === 'dash'}
 								<span class="size-3 rounded-full border border-dashed border-current"></span>
 							{:else}
 								<Icon name="x" size={14} strokeWidth={2.5} />
 							{/if}
 						</span>
-						<span
-							class="line-clamp-2 min-w-0 flex-1 {subagent.status === 'completed'
-								? 'app-muted'
-								: subagent.status === 'interrupted' || subagent.status === 'error'
-									? 'app-muted'
-									: 'text-gray-700 dark:text-gray-300'}"
-						>
+						<span class="line-clamp-2 min-w-0 flex-1 text-gray-700 dark:text-gray-300">
 							{subagent.task}
 						</span>
 						<span class="flex shrink-0 items-center gap-1">
