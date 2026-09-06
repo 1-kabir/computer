@@ -7,7 +7,16 @@ from pathlib import Path
 
 # Isolate data dir before any cptr import (env is read at import time).
 _tmp_data_dir = tempfile.mkdtemp(prefix="cptr-test-memory-")
-os.environ.setdefault("CPTR_DATA_DIR", _tmp_data_dir)
+if "CPTR_DATA_DIR" not in os.environ:
+    os.environ["CPTR_DATA_DIR"] = _tmp_data_dir
+elif not os.environ["CPTR_DATA_DIR"].startswith(tempfile.gettempdir()):
+    # Inherited a real CPTR_DATA_DIR (e.g. from the cptr service environment):
+    # these tests create/drop tables; fail loudly rather than touch live data.
+    raise SystemExit(
+        f"refusing to run: CPTR_DATA_DIR={os.environ['CPTR_DATA_DIR']!r} was inherited "
+        "from the environment and does not point at a temp dir. Run with an isolated "
+        "data dir, not the live one."
+    )
 
 import pytest
 

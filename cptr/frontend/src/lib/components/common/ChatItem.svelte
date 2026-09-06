@@ -19,9 +19,15 @@
 	let { chat, isSelected = false, onclick, onmenu }: Props = $props();
 	let status = $derived($chatStatuses.get(chat.id));
 	let active = $derived(status?.active ?? chat.is_active ?? false);
+	// Meta fallback is unconditional: a chatStatuses entry seeded meta-less has
+	// bridge=false forever otherwise, defeating the mute for this chat.
+	let isBridge = $derived((status?.bridge || Boolean(chat.meta?.bridge_bot_id)) === true);
 	let unread = $derived(
 		!isSelected &&
-			!($bridgeNotificationsMuted && (status?.bridge ?? Boolean(chat.meta?.bridge_bot_id))) &&
+			!(
+				$bridgeNotificationsMuted &&
+				isBridge
+			) &&
 			(status
 				? isChatUnread(status)
 				: !active && (chat.last_read_at === null || chat.updated_at > chat.last_read_at))
