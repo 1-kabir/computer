@@ -2800,8 +2800,15 @@ async def run_chat_task(
                 messages.extend(new_messages)
                 new_messages_since += len(new_messages)
 
-                # Persist after all tool calls
-                await _save_message("tool calls complete", content=content, output=output_items)
+                # Persist after all tool calls. message_meta carries the
+                # truncated flag when the provider stream ended early — pass
+                # it through so the flag survives to the final save.
+                await _save_message(
+                    "tool calls complete",
+                    content=content,
+                    output=output_items,
+                    **({"meta": message_meta} if message_meta else {}),
+                )
                 restart = True
 
             if not restart:
@@ -2814,6 +2821,7 @@ async def run_chat_task(
                     output=output_items,
                     usage=last_usage,
                     done=True,
+                    **({"meta": message_meta} if message_meta else {}),
                 )
                 _task_state.pop(message_id, None)
                 await _emit_done()
@@ -2830,13 +2838,15 @@ async def run_chat_task(
                 task_completed_success = True
                 return
 
-        # Max iterations reached
+        # Max iterations reached. Merge meta (preserve truncated flag if the
+        # provider stream had already ended early).
+        max_iter_meta = {**message_meta, "error": "max iterations reached"}
         await _save_message(
             "max iterations",
             content=content,
             output=output_items,
             done=True,
-            meta={"error": "max iterations reached"},
+            meta=max_iter_meta,
         )
         _task_state.pop(message_id, None)
         await _emit_done()
@@ -2853,7 +2863,13 @@ async def run_chat_task(
     except asyncio.CancelledError:
         _flush_text()
         _scrub_incomplete_items(output_items)
-        await _save_message("cancelled", content=content, output=output_items, done=True)
+        await _save_message(
+            "cancelled",
+            content=content,
+            output=output_items,
+            done=True,
+            **({"meta": message_meta} if message_meta else {}),
+        )
         _task_state.pop(message_id, None)
         await _emit_done()
     except Exception as e:
@@ -2886,7 +2902,7 @@ async def run_chat_task(
             content=content,
             output=output_items,
             done=True,
-            meta={"error": error_msg},
+            meta={**message_meta, "error": error_msg},
         )
         _task_state.pop(message_id, None)
         await emit(done=True, error=error_msg)

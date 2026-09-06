@@ -1095,6 +1095,7 @@ async def stream_openai_responses(
                             output_items_by_id[item_id] = active_reasoning_item
                         return active_reasoning_item
 
+                    saw_completed = False
                     async for line in resp.aiter_lines():
                         if not line.startswith("data: "):
                             continue
@@ -1103,6 +1104,9 @@ async def stream_openai_responses(
                             break
                         event = json.loads(raw)
                         etype = event.get("type")
+
+                        if etype == "response.completed":
+                            saw_completed = True
 
                         if etype == "response.output_text.delta":
                             emitted = True
@@ -1201,7 +1205,21 @@ async def stream_openai_responses(
                                 yield {"type": "usage", **usage}
                             emitted = True
                             yield {"type": "done"}
-            return
+                    # Stream ended without response.completed: the provider
+                    # dropped the connection mid-response. Surface that instead
+                    # of silently saving a partial reply (mirrors the
+                    # chat-completions path's truncation detection).
+                    if not saw_completed:
+                        if emitted:
+                            yield {"type": "truncated", "reason": "stream_end"}
+                        else:
+                            raise EmptyCompletionError(
+                                "Responses API stream ended before response.completed "
+                                "with no events."
+                            )
+                    else:
+                        yield {"type": "done"}
+                return
         except _STREAM_RETRY_ERRORS as exc:
             if (
                 emitted

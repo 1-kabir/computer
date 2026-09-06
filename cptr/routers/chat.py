@@ -888,13 +888,20 @@ async def update_chat(request: Request, chat_id: str, body: UpdateChatRequest):
     if not title:
         raise HTTPException(422, "title cannot be empty")
 
-    updated_at = now_ms()
-    await Chat.update_title(chat_id, title, updated_at)
+    await Chat.update_title(chat_id, title, now_ms())
     workspace = (chat.meta or {}).get("workspace", "")
-    from cptr.utils.chat_task import get_active_chat_ids
-    from cptr.socket.main import emit_to_user
+
+    # Re-read the row: update_title intentionally preserves the original
+    # updated_at (rename is metadata-only and must not flip unread state).
+    # Emitting a fresh now_ms() here would plant a phantom newer timestamp
+    # in every client's cache, re-flipping the client-side unread sort/state
+    # even though the server-side count says 0.
+    refreshed = await Chat.get_by_id(chat_id)
+    effective_updated_at = refreshed.updated_at if refreshed else None
 
     from cptr.models.users import UserStates
+    from cptr.socket.main import emit_to_user
+    from cptr.utils.chat_task import get_active_chat_ids
 
     mute_bridge = await UserStates.get_flag(user_id, "bridge_notifications_muted")
     unread_counts = await Chat.unread_counts_by_workspace(
@@ -903,16 +910,15 @@ async def update_chat(request: Request, chat_id: str, body: UpdateChatRequest):
         get_active_chat_ids(),
         exclude_bridge=mute_bridge,
     )
-    await emit_to_user(
-        user_id,
-        {
-            "chat_id": chat_id,
-            "title": title,
-            "workspace": workspace,
-            "updated_at": updated_at,
-            "workspace_unread_count": unread_counts.get(workspace, 0),
-        },
-    )
+    payload = {
+        "chat_id": chat_id,
+        "title": title,
+        "workspace": workspace,
+        "workspace_unread_count": unread_counts.get(workspace, 0),
+    }
+    if effective_updated_at is not None:
+        payload["updated_at"] = effective_updated_at
+    await emit_to_user(user_id, payload)
     return {"ok": True, "title": title}
 
 

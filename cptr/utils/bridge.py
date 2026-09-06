@@ -274,18 +274,23 @@ class BotManager:
         """Attach a _stream_loop for tasks started outside _dispatch_task.
 
         Called synchronously from start_task; spawns the watcher as its own
-        task so the caller is never blocked on DB lookups.
+        task so the caller is never blocked on DB lookups. The watcher entry
+        self-removes on completion (dict would otherwise grow unboundedly —
+        one entry per task start app-wide).
         """
         try:
-            self._stream_tasks[f"watcher:{chat_id}:{message_id}"] = asyncio.create_task(
-                self._attach_watcher(chat_id, message_id)
-            )
+            key = f"watcher:{chat_id}:{message_id}"
+            task = asyncio.create_task(self._attach_watcher(chat_id, message_id))
+            self._stream_tasks[key] = task
+            task.add_done_callback(lambda _t, k=key: self._stream_tasks.pop(k, None))
         except Exception:
             logger.exception("[bridge] failed to spawn watcher for chat %s", chat_id[:8])
 
     async def _attach_watcher(self, chat_id: str, message_id: str) -> None:
         """Resolve bot+thread for a chat and start a delivery loop if it's ours."""
         try:
+            if not self._adapters:
+                return  # no bots configured/running — skip the DB entirely
             from cptr.models import Chat
             from cptr.utils.db import get_db
             from sqlalchemy import select
@@ -390,6 +395,11 @@ class BotManager:
     async def stop_all(self) -> None:
         for bot_id in list(self._tasks.keys()):
             await self.stop_bot(bot_id)
+        # Release the chat_task observer so a restarted manager doesn't
+        # stack a second watcher alongside this one.
+        unregister = getattr(self, "_unregister_task_watcher", None)
+        if unregister:
+            unregister()
 
     def is_running(self, bot_id: str) -> bool:
         task = self._tasks.get(bot_id)
@@ -1039,7 +1049,6 @@ class BotManager:
                     if not use_draft:
                         try:
                             await adapter.send_typing(platform_chat_id)
-                            _last_typing_ts = time.monotonic()
                         except Exception:
                             pass
 

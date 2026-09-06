@@ -432,8 +432,13 @@ def test_send_only_typing_refresh_throttled(monkeypatch):
 # ── Staleness guard + persisted dedupe ───────────────────────
 
 
-def test_stale_inbound_message_dropped():
-    """A webhook redelivery of an hours-old message must not become an event."""
+def test_stale_unseen_message_processed_with_warning(caplog):
+    """A stale but never-seen message is PROCESSED (with a warning), not dropped.
+
+    Semantics after the audit fix: dedupe is the primary defense (seen ids),
+    so a legitimately new but late-delivered message (user offline, Meta
+    queueing) still reaches the agent. Previously it was silently dropped.
+    """
     import time as _time
 
     adapter, _ = _make_adapter()
@@ -443,7 +448,7 @@ def test_stale_inbound_message_dropped():
         events.append(event)
 
     adapter.on_message = _on_message
-    stale = int(_time.time()) - 3600  # 1h old
+    stale = int(_time.time()) - 3600  # 1h old — beyond _max_inbound_age
     payload = {
         "entry": [
             {
@@ -456,7 +461,7 @@ def test_stale_inbound_message_dropped():
                                     "id": "wamid.STALE1",
                                     "timestamp": str(stale),
                                     "type": "text",
-                                    "text": {"body": "phantom hey"},
+                                    "text": {"body": "late but legit"},
                                 }
                             ],
                             "contacts": [{"wa_id": "15551234567", "profile": {"name": "K"}}],
@@ -467,7 +472,12 @@ def test_stale_inbound_message_dropped():
         ]
     }
     _run_webhooks(adapter, [payload])
-    assert events == [], "stale redelivered message was re-imported"
+    assert len(events) == 1, "stale but UNSEEN message must still be processed"
+    assert events[0].text == "late but legit"
+
+    # A redelivery of the same stale message is still dropped (dedupe wins)
+    _run_webhooks(adapter, [payload])
+    assert len(events) == 1, "redelivered stale message must be deduped"
 
 
 def test_seen_ids_persist_across_reinstants(monkeypatch):

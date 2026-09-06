@@ -72,9 +72,12 @@ class WhatsAppAdapter(BaseAdapter):
         )
         self._load_seen_ids()
         # Drop inbound messages older than this at receipt time (seconds).
-        # Meta redelivers old webhooks; without a staleness guard a
-        # redelivered message from hours ago re-enters the conversation.
-        self._max_inbound_age = 300.0
+        # The seen-id dedupe (checked first) is the primary defense against
+        # Meta redeliveries; this staleness guard only breaks the
+        # reprocessing of truly ancient messages after a seen-history loss.
+        # 600s tolerates Meta's documented pipeline queuing delays while
+        # still bounding replays.
+        self._max_inbound_age = 600.0
 
     def _load_seen_ids(self) -> None:
         """Restore persisted seen-message ids so restarts keep deduping."""
@@ -88,9 +91,13 @@ class WhatsAppAdapter(BaseAdapter):
             logger.debug("[whatsapp] failed to load seen ids", exc_info=True)
 
     def _save_seen_ids(self) -> None:
+        """Persist seen ids atomically (tmp + rename) so a crash mid-write
+        can never corrupt the dedupe history."""
         try:
             self._seen_ids_path.parent.mkdir(parents=True, exist_ok=True)
-            self._seen_ids_path.write_text(json.dumps(list(self._seen_message_ids)))
+            tmp = self._seen_ids_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(list(self._seen_message_ids)))
+            tmp.replace(self._seen_ids_path)
         except Exception:
             logger.debug("[whatsapp] failed to persist seen ids", exc_info=True)
 
@@ -141,26 +148,30 @@ class WhatsAppAdapter(BaseAdapter):
                 value = change.get("value", {})
                 for message in value.get("messages", []):
                     msg_id = message.get("id", "")
-                    # Staleness guard: Meta redelivers old webhooks (retries,
-                    # reconnects). Drop anything older than the cutoff unless
-                    # the webhook omitted a timestamp.
-                    try:
-                        msg_ts = int(message.get("timestamp", "0"))
-                    except (TypeError, ValueError):
-                        msg_ts = 0
-                    if msg_ts and (time.time() - msg_ts) > self._max_inbound_age:
-                        logger.info(
-                            "[whatsapp] Dropping stale inbound message %s (%.0fs old)",
-                            msg_id or "?",
-                            time.time() - msg_ts,
-                        )
-                        continue
+                    # Dedupe FIRST: it is the primary redelivery defense and
+                    # must win over the staleness guard, so a legitimately new
+                    # (unseen) but late-delivered message is still processed —
+                    # a user's phone offline for a few minutes must not mean
+                    # their message silently vanishes.
                     if msg_id:
                         if msg_id in self._seen_message_ids:
                             logger.info("[whatsapp] Dropping redelivered message %s", msg_id)
                             continue
                         self._seen_message_ids.append(msg_id)
                         self._save_seen_ids()
+                    # Staleness guard (belt-and-suspenders for messages never
+                    # seen, e.g. after a seen-history loss). Late-but-unseen
+                    # messages are processed with a warning, not dropped.
+                    try:
+                        msg_ts = int(message.get("timestamp", "0"))
+                    except (TypeError, ValueError):
+                        msg_ts = 0
+                    if msg_ts and (time.time() - msg_ts) > self._max_inbound_age:
+                        logger.warning(
+                            "[whatsapp] Processing stale but unseen message %s (%.0fs old)",
+                            msg_id or "?",
+                            time.time() - msg_ts,
+                        )
                     self._last_inbound_message_id = msg_id or None
                     msg_type = message.get("type", "")
 
@@ -330,7 +341,7 @@ class WhatsAppAdapter(BaseAdapter):
         await self._post_status(message_id or self._last_inbound_message_id, typing=False)
 
     async def _post_status(self, message_id: str | None, *, typing: bool) -> None:
-        if not self._http or not message_id:
+        if not self._http or not message_id or getattr(self, "_status_disabled", False):
             return
         body: dict = {
             "messaging_product": "whatsapp",
@@ -344,6 +355,14 @@ class WhatsAppAdapter(BaseAdapter):
                 f"{API_BASE}/{self._phone_number_id}/messages",
                 json=body,
             )
+            if resp.status_code == 401:
+                # Token expired/revoked: stop retrying status posts entirely —
+                # otherwise every typing refresh and receipt spams failures.
+                self._status_disabled = True
+                logger.warning(
+                    "[whatsapp] token rejected (401) — disabling read/typing status posts"
+                )
+                return
             if resp.status_code >= 400:
                 logger.warning(
                     "[whatsapp] status POST failed: %s %s",
