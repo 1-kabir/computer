@@ -41,7 +41,10 @@ function statusFrom(
 		updatedAt: source.updated_at,
 		lastReadAt: source.last_read_at,
 		active: source.is_active ?? current?.active ?? false,
-		bridge: current?.bridge ?? Boolean(source.meta?.bridge_bot_id)
+		// Monotonic: API meta is authoritative, so a stale seeded `false` (e.g.
+		// from setChatActive before any chat-list fetch) gets corrected here.
+		// bridge_bot_id never disappears from a chat's meta, so `||` is safe.
+		bridge: (current?.bridge || Boolean(source.meta?.bridge_bot_id)) === true
 	};
 }
 
@@ -212,6 +215,11 @@ export function bindGlobalChatListener() {
 					next.set(data.chat_id, { ...current, updatedAt });
 					return next;
 				});
+			}
+			// The done event carries the authoritative bridge flag (backend reads
+			// chat.meta.bridge_bot_id); use it to correct a stale seeded value.
+			if (data.bridge === true) {
+				setChatBridge(data.chat_id, true);
 			}
 			if (typeof data.last_read_at === 'number') {
 				setChatReadAt(data.chat_id, data.last_read_at);

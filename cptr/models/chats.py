@@ -182,12 +182,30 @@ class Chat(Base):
 
     @staticmethod
     async def update_title(chat_id: str, title: str, updated_at: int = 0) -> bool:
+        """Set a chat's title.
+
+        Renaming is a metadata change, not new activity: it must never make the
+        chat count as unread. The unread predicate is
+        updated_at > coalesce(last_read_at, 0), so bumping updated_at here flips
+        every renamed chat to unread and lights up the workspace badge. Keep
+        the prior updated_at; only when the chat has never been read
+        (last_read_at IS NULL) also stamp last_read_at so a freshly-created,
+        auto-titled chat does not linger as unread after its title is set.
+        """
         async with await get_db() as db:
-            result = await db.execute(
-                update(Chat).where(Chat.id == chat_id).values(title=title, updated_at=updated_at)
-            )
+            chat = (await db.execute(select(Chat).where(Chat.id == chat_id))).scalar_one_or_none()
+            if not chat:
+                return False
+            if updated_at and chat.last_read_at is None:
+                await db.execute(
+                    update(Chat)
+                    .where(Chat.id == chat_id)
+                    .values(title=title, updated_at=updated_at, last_read_at=updated_at)
+                )
+            else:
+                await db.execute(update(Chat).where(Chat.id == chat_id).values(title=title))
             await db.commit()
-            return result.rowcount > 0
+            return True
 
     @staticmethod
     async def update_summary(chat_id: str, summary: str, updated_at: int = 0) -> bool:

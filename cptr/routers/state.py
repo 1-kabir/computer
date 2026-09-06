@@ -140,6 +140,15 @@ async def put_preferences(request: Request):
     if not user_id:
         return {"status": "skipped"}
     body = await request.json()
+
+    # The frontend persists the bridge-mute toggle under its camelCase key,
+    # while backend readers use the snake_case flag name. Alias so the flag
+    # is actually readable by UserStates.get_flag("bridge_notifications_muted")
+    # at all seven call sites; without this the mute never applies to server
+    # computed unread counts. snake_case wins if both are present.
+    if "bridgeNotificationsMuted" in body:
+        body.setdefault("bridge_notifications_muted", body["bridgeNotificationsMuted"])
+
     current = await UserStates.get_data(user_id)
     await UserStates.save_data(user_id, {**current, **body})
     return {"status": "saved"}
