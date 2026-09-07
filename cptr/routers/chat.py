@@ -249,7 +249,14 @@ async def mark_all_chats_read(request: Request, body: MarkWorkspaceReadRequest):
     """
     user_id = _get_user(request)
     updated_at = now_ms()
-    marked = await Chat.mark_all_read(user_id, body.workspace or None, updated_at)
+    from cptr.utils.chat_task import get_active_chat_ids
+
+    marked = await Chat.mark_all_read(
+        user_id,
+        body.workspace or None,
+        updated_at,
+        exclude_active=get_active_chat_ids(),
+    )
 
     from cptr.models.users import UserStates
     from cptr.socket.main import emit_to_user

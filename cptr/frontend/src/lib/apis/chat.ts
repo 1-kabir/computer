@@ -48,7 +48,8 @@ export type SubagentStatus = 'starting' | 'running' | 'completed' | 'interrupted
 
 export interface SubagentInfo {
 	delegation_id: string;
-	task: string;
+	// Human-readable task description; null for legacy/edge records — render with a fallback.
+	task: string | null;
 	status: SubagentStatus;
 	subagent_chat_id?: string | null;
 	error?: string | null;

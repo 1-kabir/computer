@@ -308,11 +308,22 @@ class Chat(Base):
             return [(path,) for (path,) in result.all() if path]
 
     @staticmethod
-    async def mark_all_read(user_id: str, workspace_path: str | None, last_read_at: int) -> int:
+    async def mark_all_read(
+        user_id: str,
+        workspace_path: str | None,
+        last_read_at: int,
+        exclude_active: set[str] | None = None,
+    ) -> int:
         """Stamp last_read_at on every unread chat, optionally scoped to one workspace.
 
-        Mirrors unread_counts_by_workspace filters so 'mark as read' clears
-        exactly the chats those counts were derived from. Returns rows updated.
+        Mirrors unread_counts_by_workspace's static filters so 'mark as read'
+        clears exactly the chats those counts were derived from. Active chats
+        are excluded when exclude_active is passed (mirroring the count
+        query): an in-flight task's Chat.touch on completion would otherwise
+        immediately re-flip the chat to unread after a bulk read.
+        Deliberately NOT bridge-excluded: read-all clears muted bridge chats
+        too, so unmuting later doesn't surface a wall of stale unread badges.
+        Returns rows updated.
         """
         workspace = Chat.meta["workspace"].as_string()
         filters = [
@@ -323,6 +334,8 @@ class Chat(Base):
         ]
         if workspace_path:
             filters.append(workspace == workspace_path)
+        if exclude_active:
+            filters.append(Chat.id.not_in(exclude_active))
         statement = update(Chat).where(*filters).values(last_read_at=last_read_at)
         async with await get_db() as db:
             result = await db.execute(statement)
