@@ -130,7 +130,16 @@ async def get_preferences(request: Request):
     user_id = await _get_user_id(request)
     if not user_id:
         return {}
-    return await UserStates.get_data(user_id)
+    data = await UserStates.get_data(user_id)
+    # Lazy migration: the bridge-mute toggle was historically persisted under
+    # its camelCase key only, while backend flag readers use the snake_case
+    # name. Users who toggled before the alias existed would show mute ON in
+    # the UI while every server-side get_flag returned False. Backfill the
+    # snake_case key once on read (snake wins if both exist).
+    if "bridgeNotificationsMuted" in data and "bridge_notifications_muted" not in data:
+        data["bridge_notifications_muted"] = data["bridgeNotificationsMuted"]
+        await UserStates.save_data(user_id, data)
+    return data
 
 
 @router.put("/preferences")

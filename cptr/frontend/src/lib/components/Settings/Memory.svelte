@@ -29,6 +29,7 @@
 	// for one workspace could be saved as another workspace's override if the
 	// user switched workspaces while this panel stayed mounted.
 	let initializedWorkspace = $state<string | null>(null);
+	let loadGen = $state(0);
 	$effect(() => {
 		if (initializedWorkspace === null) {
 			// initial load happens in onMount; just record the starting workspace
@@ -42,16 +43,18 @@
 	});
 
 	async function load() {
+		const gen = ++loadGen;
 		loading = true;
 		try {
 			const state = await getMemory(workspace);
+			if (gen !== loadGen) return; // superseded by a newer workspace switch
 			settings = state.settings;
 			userEntries = state.user.entries;
 			userUsage = state.user.usage;
 		} catch {
 			toast.error($t('memory.failedToLoad'));
 		} finally {
-			loading = false;
+			if (gen === loadGen) loading = false;
 		}
 	}
 

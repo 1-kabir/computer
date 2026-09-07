@@ -39,7 +39,7 @@
 	async function killSubagent(subagent: SubagentInfo) {
 		const confirmed = await requestConfirm({
 			title: $t('chat.subagentsKillTitle'),
-			message: $t('chat.subagentsKillConfirm', { task: subagent.task.slice(0, 80) }),
+			message: $t('chat.subagentsKillConfirm', { task: (subagent.task ?? '').slice(0, 80) }),
 			cancelLabel: $t('common.cancel'),
 			confirmLabel: $t('chat.subagentsKill')
 		});

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -71,7 +72,9 @@ class WhatsAppAdapter(BaseAdapter):
             Path(DATA_DIR) / "bridge" / f"whatsapp_seen_{bot_id or 'default'}.json"
         )
         self._load_seen_ids()
-        # Drop inbound messages older than this at receipt time (seconds).
+        # Dedupe state lives across restarts; disabled-flag resets when the
+        # adapter (re)connects with a fresh client/token.
+        self._status_disabled: bool = False
         # The seen-id dedupe (checked first) is the primary defense against
         # Meta redeliveries; this staleness guard only breaks the
         # reprocessing of truly ancient messages after a seen-history loss.
@@ -92,10 +95,12 @@ class WhatsAppAdapter(BaseAdapter):
 
     def _save_seen_ids(self) -> None:
         """Persist seen ids atomically (tmp + rename) so a crash mid-write
-        can never corrupt the dedupe history."""
+        can never corrupt the dedupe history. The tmp name is writer-unique:
+        a deterministic one would let two writers' renames race and erase
+        each other's ids."""
         try:
             self._seen_ids_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._seen_ids_path.with_suffix(".tmp")
+            tmp = self._seen_ids_path.with_suffix(f".tmp.{os.getpid()}.{id(self):x}")
             tmp.write_text(json.dumps(list(self._seen_message_ids)))
             tmp.replace(self._seen_ids_path)
         except Exception:
@@ -108,6 +113,9 @@ class WhatsAppAdapter(BaseAdapter):
             timeout=15,
             headers={"Authorization": f"Bearer {self._access_token}"},
         )
+        # Fresh client/token: re-enable status posts in case a previous
+        # connection disabled them on a 401.
+        self._status_disabled = False
 
         # Verify token by fetching phone number info
         try:
@@ -148,6 +156,13 @@ class WhatsAppAdapter(BaseAdapter):
                 value = change.get("value", {})
                 for message in value.get("messages", []):
                     msg_id = message.get("id", "")
+                    if not msg_id:
+                        # A message without an id cannot be deduped — Meta
+                        # retries webhooks, so redeliveries would each spawn
+                        # another agent run. Drop; the schema always carries
+                        # wamid ids in practice, this is defense-in-depth.
+                        logger.warning("[whatsapp] Dropping message without id (undedupeable)")
+                        continue
                     # Dedupe FIRST: it is the primary redelivery defense and
                     # must win over the staleness guard, so a legitimately new
                     # (unseen) but late-delivered message is still processed —
