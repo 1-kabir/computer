@@ -107,6 +107,23 @@ export function isChatUnreadVisible(status: ChatStatus | undefined, muted: boole
 	return isChatUnread(status) && !(muted && (status?.bridge ?? false));
 }
 
+// ── Auto-continue attempt tracking ───────────────────────────
+// Module-level so co-mounted ChatPanel instances (workspace + home pane)
+// share the per-message cap; survives chat switches, resets on reload.
+const autoContinueAttempts = new Map<string, number>();
+const AUTO_CONTINUE_LIMIT = 2;
+
+export function bumpAutoContinueAttempt(chatId: string, msgId: string): number {
+	const key = `${chatId}:${msgId}`;
+	const next = (autoContinueAttempts.get(key) ?? 0) + 1;
+	autoContinueAttempts.set(key, next);
+	return next;
+}
+
+export function autoContinueLimitReached(chatId: string, msgId: string): boolean {
+	return (autoContinueAttempts.get(`${chatId}:${msgId}`) ?? 0) >= AUTO_CONTINUE_LIMIT;
+}
+
 /** Set of tab IDs whose chat is currently streaming (assistant message not done). */
 export const streamingChatTabs = writable<Set<string>>(new Set());
 
@@ -203,6 +220,13 @@ export function bindGlobalChatListener() {
 			last_read_at?: number;
 			bridge?: boolean;
 		}) => {
+			if (data.type === 'chat:read_all') {
+				// Bulk event: carries no chat_id, and SidebarWorkspaceList
+				// refreshes its chat cache on it. Feeding it through the
+				// per-chat branches below would no-op (setChatReadAt with
+				// undefined) and leave stale unread dots in chatStatuses.
+				return;
+			}
 			if (data.type === 'chat:active' && typeof data.active === 'boolean') {
 				setChatActive(data.chat_id, data.active, data.workspace);
 			}

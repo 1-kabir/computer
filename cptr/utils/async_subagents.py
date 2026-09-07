@@ -241,11 +241,22 @@ async def _finalize(
         record["error"] = error
         record["completed_at"] = time.time()
         snapshot = _serialize_record(record)
+        # The JSON-safe whitelist strips the live runtime fields the injector
+        # needs (user_id, request, connection, timer_chat_id) — re-attach them
+        # from the raw record, or the injection silently no-ops and the
+        # subagent's result never reaches the parent chat.
+        injector_payload = {
+            **snapshot,
+            "user_id": record.get("user_id"),
+            "request": record.get("request"),
+            "connection": record.get("connection"),
+            "timer_chat_id": record.get("timer_chat_id"),
+        }
         _prune_completed_locked()
 
     injector = _completion_injector_override or _inject_completion
     try:
-        await injector(snapshot)
+        await injector(injector_payload)
     except Exception:
         logger.exception("Failed to inject async subagent completion %s", delegation_id)
 
