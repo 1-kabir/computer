@@ -34,7 +34,9 @@
 		registerStreamingChat,
 		unregisterStreamingChat,
 		updateChatStatuses,
-		registerToolApprovalShortcutHandler
+		registerToolApprovalShortcutHandler,
+		bumpAutoContinueAttempt,
+		autoContinueLimitReached
 	} from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { onMount, onDestroy, tick } from 'svelte';
@@ -364,22 +366,24 @@
 		return null;
 	});
 	let chatIsBridge = $state(false);
-	let autoContinueAttempts = $state<Record<string, number>>({});
 	$effect(() => {
 		const msg = truncatedMessage;
 		if (!msg || !get(autoContinue) || chatIsBridge) return;
-		const count = autoContinueAttempts[msg.id] ?? 0;
-		if (count >= 2) return;
+		if (!chatId || autoContinueLimitReached(chatId, msg.id)) return;
 		// Guard: don't fire while user is composing; wait a beat for socket syncs
 		const timer = setTimeout(() => {
 			if (inputText.trim()) return;
-			autoContinueAttempts = { ...autoContinueAttempts, [msg.id]: count + 1 };
+			bumpAutoContinueAttempt(chatId, msg.id);
 			void sendContinue('auto');
 		}, 2000);
 		return () => clearTimeout(timer);
 	});
 	async function sendContinue(mode: 'manual' | 'auto') {
-		if (sending || streaming) return;
+		// queuedMessages guard: when the truncated task finished, its finally
+		// block drains queued inputs and starts a new task; our optimistic
+		// state may still show streaming=false for a beat. Continuing then
+		// would race the dequeued batch as a competing sibling branch.
+		if (sending || streaming || queuedMessages.length > 0) return;
 		const parentId =
 			activePath.length > 0 ? activePath[activePath.length - 1].msg.id : null;
 		if (!selectedModel) return;

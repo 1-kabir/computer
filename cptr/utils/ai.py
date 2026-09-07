@@ -1184,6 +1184,26 @@ async def stream_openai_responses(
                                     "item": item,
                                 }
 
+                        elif etype == "response.incomplete":
+                            # Responses API's normal terminal event for
+                            # length/tool-limit-capped generations. Mirrors the
+                            # completions path's finish_reason="length": emit
+                            # the event's usage and mark truncated with the
+                            # real reason instead of falling through to
+                            # stream_end (which would lose token accounting).
+                            resp_body = event.get("response", {})
+                            usage = resp_body.get("usage") or {}
+                            if usage:
+                                emitted = True
+                                yield {"type": "usage", **usage}
+                            reason = (resp_body.get("incomplete_details") or {}).get(
+                                "reason"
+                            ) or "length"
+                            emitted = True
+                            yield {"type": "truncated", "reason": reason}
+                            saw_completed = True  # terminal event reached; not a stream drop
+                            yield {"type": "done"}
+
                         elif etype == "response.failed":
                             error = event.get("response", {}).get("error", {})
                             msg = error.get("message", "Response failed")
@@ -1205,7 +1225,7 @@ async def stream_openai_responses(
                                 yield {"type": "usage", **usage}
                             emitted = True
                             yield {"type": "done"}
-                    # Stream ended without response.completed: the provider
+                    # Stream ended without a terminal event: the provider
                     # dropped the connection mid-response. Surface that instead
                     # of silently saving a partial reply (mirrors the
                     # chat-completions path's truncation detection).
@@ -1217,8 +1237,6 @@ async def stream_openai_responses(
                                 "Responses API stream ended before response.completed "
                                 "with no events."
                             )
-                    else:
-                        yield {"type": "done"}
                 return
         except _STREAM_RETRY_ERRORS as exc:
             if (
