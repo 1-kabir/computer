@@ -398,11 +398,11 @@
 		return key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
 	}
 
-	/** Format a turn duration: <60s as Xs, else Xm Ys */
+	/** Format a turn duration: <60s as Xs, else Xm Ys (rounds total first so 119.6s -> "2m 0s", never "1m 60s") */
 	function formatTurnDuration(seconds: number): string {
-		const s = Math.max(0, seconds);
-		if (s < 60) return `${Math.round(s)}s`;
-		return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+		const s = Math.round(Math.max(0, seconds));
+		if (s < 60) return `${s}s`;
+		return `${Math.floor(s / 60)}m ${s % 60}s`;
 	}
 
 	const showTiming = $derived($showTurnTiming && turnSeconds != null && turnSeconds >= 0);
