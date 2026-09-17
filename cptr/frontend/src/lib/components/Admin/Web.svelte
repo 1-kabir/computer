@@ -31,6 +31,7 @@
 	let braveKey = $state('');
 	let perplexityKey = $state('');
 	let perplexityBaseUrl = $state('');
+	let parallelKey = $state('');
 	let firecrawlSearchKey = $state('');
 	let firecrawlSearchBaseUrl = $state('https://api.firecrawl.dev');
 	let searxngBaseUrl = $state('');
@@ -75,6 +76,7 @@
 			braveKey = (config['web.brave_api_key'] as string) || '';
 			perplexityKey = (config['web.perplexity_api_key'] as string) || '';
 			perplexityBaseUrl = (config['web.perplexity_base_url'] as string) || '';
+			parallelKey = (config['web.parallel_api_key'] as string) || '';
 			firecrawlSearchKey = (config['web.firecrawl_api_key'] as string) || '';
 			firecrawlSearchBaseUrl =
 				(config['web.firecrawl_base_url'] as string) || 'https://api.firecrawl.dev';
@@ -151,6 +153,7 @@
 				'web.brave_api_key': braveKey,
 				'web.perplexity_api_key': perplexityKey,
 				'web.perplexity_base_url': perplexityBaseUrl,
+				'web.parallel_api_key': parallelKey,
 				'web.firecrawl_api_key': firecrawlSearchKey,
 				'web.firecrawl_base_url': firecrawlSearchBaseUrl,
 				'web.searxng_base_url': searxngBaseUrl,
@@ -275,6 +278,7 @@
 							<option value="firecrawl">{$t('admin.browserFirecrawl')}</option>
 							<option value="searxng">SearXNG</option>
 							<option value="perplexity">Perplexity</option>
+							<option value="parallel">Parallel</option>
 							<option value="duckduckgo">DuckDuckGo</option>
 							<option value="chat_completions">{$t('admin.webChatCompletions')}</option>
 						</select>
@@ -411,6 +415,22 @@
 							/>
 							<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mt-0.5">
 								{$t('admin.webPerplexityBaseUrlHint')}
+							</p>
+						</div>
+					{:else if searchProvider === 'parallel'}
+						<div>
+							<label class="text-xs text-gray-600 dark:text-gray-400" for="parallel-key"
+								>{$t('admin.webParallelKey')}</label
+							>
+							<input
+								id="parallel-key"
+								type="password"
+								bind:value={parallelKey}
+								placeholder="parallel-..."
+								class="w-full mt-1 h-7 px-2 rounded-lg text-xs bg-gray-100 dark:bg-white/6 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-white/8 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+							/>
+							<p class="text-[0.6875rem] text-gray-400 dark:text-gray-600 mt-0.5">
+								{$t('admin.webParallelHint')}
 							</p>
 						</div>
 					{:else if searchProvider === 'chat_completions'}

@@ -426,6 +426,8 @@
 	"admin.webPerplexityHint": "Get your API key at perplexity.ai",
 	"admin.webPerplexityBaseUrl": "Base URL",
 	"admin.webPerplexityBaseUrlHint": "Leave blank for api.perplexity.ai. Change for LiteLLM or other compatible proxies.",
+	"admin.webParallelKey": "Parallel API Key",
+	"admin.webParallelHint": "Get your API key at parallel.ai",
 	"admin.webChatCompletions": "Chat Completions",
 	"admin.webCcBaseUrl": "Base URL",
 	"admin.webCcKey": "API Key",
