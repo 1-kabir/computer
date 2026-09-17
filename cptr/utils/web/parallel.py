@@ -33,6 +33,9 @@ async def search(query: str, api_key: str, count: int = 5) -> str:
         title = item.get("title", "")
         url = item.get("url", "")
         excerpts = item.get("excerpts", [])
+        # Guard: a bare string would join into newline-per-char.
+        if isinstance(excerpts, str):
+            excerpts = [excerpts]
         text = "\n".join(e for e in excerpts if e)[:1500]
         parts = []
         if title:
