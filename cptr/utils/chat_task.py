@@ -400,6 +400,29 @@ def get_pending_input_lock(chat_id: str) -> asyncio.Lock:
     return _pending_input_locks.setdefault(chat_id, asyncio.Lock())
 
 
+def _apply_timing_stamp(message_meta: dict, kwargs: dict) -> dict | None:
+    """Terminal-save turn-timing stamp (pure; unit-tested).
+
+    For done=True saves on tasks that have meta.timing.started_at, returns
+    the meta dict to persist: message_meta (with completed_at stamped
+    idempotently via the passed mark callback) merged UNDER any explicit
+    kwargs meta (so error blocks etc. survive). Returns None when there is
+    nothing to stamp (non-terminal saves, or tasks without started_at).
+    Mutates message_meta only through the provided callback.
+    """
+    timing = message_meta.get("timing")
+    if not kwargs.get("done") or not isinstance(timing, dict) or not timing.get("started_at"):
+        return None
+    if "completed_at" not in timing:
+        # First terminal save records the instant; later done=True saves
+        # (e.g. cancel after error) keep the original — idempotent here,
+        # not just in the caller's closure.
+        mark = kwargs.pop("_timing_mark", None)
+        if callable(mark):
+            mark()
+    return {**message_meta, **(kwargs.get("meta") or {})}
+
+
 def start_task(
     request,
     *,
@@ -1545,6 +1568,23 @@ async def run_chat_task(
     content = (msg.content or "") if msg else ""
     output_items: list[dict] = list(msg.output or []) if msg else []
     message_meta: dict = dict(msg.meta or {}) if msg else {}
+    # Turn-timing stamps: measured at the task lifecycle, not message rows.
+    # The assistant row's created_at is the placeholder-creation instant
+    # (~same as the user's send), so created_at deltas measure queue wait,
+    # not work. started_at/completed_at ride message_meta on the terminal
+    # save; the frontend prefers them when present.
+    task_started_at = now_ms()
+    message_meta["timing"] = {"started_at": task_started_at}
+    _timing_completed = False
+
+    def _mark_timing_completed() -> dict:
+        """Idempotently stamp completed_at into message_meta for terminal saves."""
+        nonlocal _timing_completed
+        if not _timing_completed:
+            message_meta["timing"]["completed_at"] = now_ms()
+            _timing_completed = True
+        return message_meta
+
     text_buffer = ""  # Accumulates text between tool calls
     task_completed_success = False
     review_messages: list[dict] = []
@@ -1593,6 +1633,16 @@ async def run_chat_task(
 
     async def _save_message(save_reason: str, **kwargs) -> bool:
         """Persist a message update and log enough detail to debug skipped saves."""
+        # Terminal save (done=True): stamp completion time for turn timing
+        # (idempotent — see _apply_timing_stamp). Non-stamping saves pass
+        # their kwargs through untouched.
+        if kwargs.get("done"):
+            stamped = _apply_timing_stamp(
+                message_meta,
+                {**kwargs, "_timing_mark": _mark_timing_completed},
+            )
+            if stamped is not None:
+                kwargs["meta"] = stamped
         saved_output = kwargs.get("output", output_items)
         saved_content = kwargs.get("content", content)
         counts, reasoning_count, reasoning_chars = _output_debug_stats(saved_output)

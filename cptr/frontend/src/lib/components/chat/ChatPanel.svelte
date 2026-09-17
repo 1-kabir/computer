@@ -398,11 +398,14 @@
 	});
 	const activePathIds = $derived(new Set(activePath.map(({ msg }) => msg.id)));
 
-	// ── Turn timing (server timestamps only) ───────────────────
-	// Turn seconds = assistant.created_at − nearest user ancestor.created_at.
-	// Both come from the server (ms via now_ms()); optimistic rows may use
-	// s or ms, so normalize each timestamp independently. Includes queue/idle
-	// time — documented in settings, not hidden.
+	// ── Turn timing ─────────────────────────────────────────────
+	// Preferred: measured task timing from the backend (meta.timing, stamped
+	// at task start + terminal save). This measures actual work, works for
+	// regenerations (whose parent chain points at the ORIGINAL prompt), and
+	// is immune to placeholder created_at semantics.
+	// Fallback (rows without timing meta — historical messages): created_at
+	// delta to the nearest user ancestor. Includes queue time; ~0s in the
+	// normal path because assistant rows are created at send time.
 
 	function toMs(ts: number): number {
 		if (ts > 10_000_000_000_000) return ts / 1_000_000; // µs → ms
@@ -412,8 +415,22 @@
 
 	const allMsgMap = $derived(new Map(allMessages.map((m) => [m.id, m])));
 
+	function timingSecondsFromMeta(msg: ChatMessageRow): number | null {
+		const timing = msg.meta?.timing as { started_at?: number; completed_at?: number } | undefined;
+		if (!timing) return null;
+		const start = timing.started_at;
+		const end = timing.completed_at;
+		if (typeof start !== 'number' || !start) return null;
+		if (typeof end !== 'number' || !end) return null; // still streaming
+		const deltaMs = toMs(end) - toMs(start);
+		if (deltaMs < 0) return null;
+		return deltaMs / 1000;
+	}
+
 	function turnSecondsFor(msg: ChatMessageRow): number | null {
 		if (msg.role !== 'assistant') return null;
+		const measured = timingSecondsFromMeta(msg);
+		if (measured != null) return measured;
 		if (typeof msg.created_at !== 'number' || !msg.created_at) return null;
 		const seen = new Set<string>();
 		let cur: string | null = msg.parent_id;
