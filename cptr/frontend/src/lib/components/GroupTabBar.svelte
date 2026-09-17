@@ -40,6 +40,7 @@
 	import { t } from '$lib/i18n';
 	import VoiceMemoModal from './VoiceMemoModal.svelte';
 	import { TAB_DRAG_MIME } from '$lib/constants';
+	import { getPathDisplayName } from '$lib/utils/paths';
 
 	interface Props {
 		group: EditorGroup;
@@ -147,7 +148,12 @@
 		// Chat tabs must rename the chat itself, not just the local tab label,
 		// otherwise the next chat load overwrites the label with the DB title
 		// and the sidebar never learns about the change.
-		if (tab.type === 'chat' && tab.path && !tab.path.startsWith('new-') && !tab.path.startsWith('pending-')) {
+		if (
+			tab.type === 'chat' &&
+			tab.path &&
+			!tab.path.startsWith('new-') &&
+			!tab.path.startsWith('pending-')
+		) {
 			try {
 				await updateChatTitle(tab.path, label);
 			} catch (e) {
@@ -459,6 +465,14 @@
 					<span class="max-w-30 overflow-hidden text-ellipsis">
 						{tab.type === 'files' ? ($activeWorkspace?.name ?? $t('bar.files')) : tab.label}
 					</span>
+					{#if tab.workspacePath && tab.workspacePath !== $activeWorkspace?.path}
+						<span
+							class="max-w-20 shrink-0 overflow-hidden rounded-md bg-sky-500/10 px-1 py-px text-[0.625rem] font-semibold text-sky-600 text-ellipsis dark:bg-sky-400/10 dark:text-sky-300"
+							use:tooltip={tab.workspacePath}
+						>
+							{getPathDisplayName(tab.workspacePath, tab.workspacePath)}
+						</span>
+					{/if}
 					{#if tab.type === 'chat' && !isActive && !($bridgeNotificationsMuted && (chatStatus?.bridge || false)) && isChatUnread(chatStatus)}
 						<span class="size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden="true"></span>
 					{/if}

@@ -8,7 +8,6 @@
 		activeWorkspace,
 		type FileSearchTarget
 	} from '$lib/stores';
-	import { get } from 'svelte/store';
 	import { t } from '$lib/i18n';
 	import { tooltip } from '$lib/tooltip';
 	import { readFile, writeFile } from '$lib/apis/files';
@@ -88,9 +87,20 @@
 		tabId: string;
 		edit?: boolean;
 		searchTarget?: FileSearchTarget;
+		/**
+		 * Cross-workspace tabs (Feature 2 MVP): the workspace this file's
+		 * git/data context belongs to. Falls back to the loaded workspace
+		 * for legacy tabs. File content itself loads by absolute path, so
+		 * cross-workspace files render without this — but git gutter, diff,
+		 * save dialog, and the rich-text editor need the owning root.
+		 */
+		workspaceRoot?: string;
 	}
 
-	let { filePath, tabId, edit = false, searchTarget }: Props = $props();
+	let { filePath, tabId, edit = false, searchTarget, workspaceRoot }: Props = $props();
+
+	// Effective owning workspace: explicit tab stamp wins, legacy tabs use the loaded workspace.
+	let effectiveRoot = $derived(workspaceRoot ?? $activeWorkspace?.path ?? '');
 
 	interface FileData {
 		path: string;
@@ -391,9 +401,10 @@
 	}
 
 	function relativeGitPath(path: string): string {
-		const ws = get(activeWorkspace);
-		if (!ws) return path;
-		return path.startsWith(ws.path) ? path.slice(ws.path.replace(/\/$/, '').length + 1) : path;
+		if (!effectiveRoot) return path;
+		return path.startsWith(effectiveRoot)
+			? path.slice(effectiveRoot.replace(/\/$/, '').length + 1)
+			: path;
 	}
 
 	function gitFileStatus(path: string): GitFile | undefined {
@@ -487,8 +498,7 @@
 			return;
 		}
 
-		const ws = get(activeWorkspace);
-		if (!ws) {
+		if (!effectiveRoot) {
 			applyGitLineChanges();
 			return;
 		}
@@ -516,7 +526,7 @@
 
 		try {
 			const params = new URLSearchParams({
-				root: ws.path,
+				root: effectiveRoot,
 				file: relativeGitPath(path),
 				staged: 'false',
 				untracked: String(fileStatus.status === 'untracked')
@@ -614,7 +624,7 @@
 	});
 
 	$effect(() => {
-		const wsPath = $activeWorkspace?.path ?? '';
+		const wsPath = effectiveRoot;
 		const status = gitStatusStore.status;
 		const data = fileData;
 		const content = data?.content;
@@ -789,14 +799,13 @@
 		destroyEditor();
 
 		try {
-			const ws = get(activeWorkspace);
-			if (!ws) throw new Error('No workspace');
-			const relPath = filePath.startsWith(ws.path)
-				? filePath.slice(ws.path.replace(/\/$/, '').length + 1)
+			if (!effectiveRoot) throw new Error('No workspace');
+			const relPath = filePath.startsWith(effectiveRoot)
+				? filePath.slice(effectiveRoot.replace(/\/$/, '').length + 1)
 				: filePath;
 			const fileStatus = gitFileStatus(filePath);
 			const params = new URLSearchParams({
-				root: ws.path,
+				root: effectiveRoot,
 				file: relPath,
 				staged: 'false',
 				untracked: String(fileStatus?.status === 'untracked'),
@@ -1161,8 +1170,11 @@
 						class="toolbar-btn {saved ? 'saved' : ''}"
 						onclick={saveFile}
 						disabled={saving}
-						use:tooltip={saving ? $t('settings.saving') : saved ? $t('settings.saved') : $t('settings.save')}
-						><Icon name={saved ? 'check' : 'save'} size={11} /></button
+						use:tooltip={saving
+							? $t('settings.saving')
+							: saved
+								? $t('settings.saved')
+								: $t('settings.save')}><Icon name={saved ? 'check' : 'save'} size={11} /></button
 					>
 				{/if}
 				{#if !isUntitled && hasGitChanges}
@@ -1175,8 +1187,10 @@
 					>
 				{/if}
 				{#if !isUntitled}
-					<button class="toolbar-btn" onclick={() => loadFile(filePath)} use:tooltip={$t('files.refresh')}
-						><Icon name="refresh" size={11} /></button
+					<button
+						class="toolbar-btn"
+						onclick={() => loadFile(filePath)}
+						use:tooltip={$t('files.refresh')}><Icon name="refresh" size={11} /></button
 					>
 				{/if}
 			</div>
@@ -1244,7 +1258,7 @@
 					<MarkdownRenderer content={fileData.content} />
 				</div>
 			{:else if markdownMode === 'editor' && RichTextEditor}
-				{@const wsPath = $activeWorkspace?.path ?? ''}
+				{@const wsPath = effectiveRoot}
 				<svelte:component
 					this={RichTextEditor}
 					bind:this={richTextRef}
@@ -1275,10 +1289,7 @@
 		{#if showSaveDialog}
 			<SaveDialog
 				defaultName={fileData?.name || 'Untitled'}
-				initialDir={(() => {
-					const ws = get(activeWorkspace);
-					return ws?.path;
-				})()}
+				initialDir={effectiveRoot || undefined}
 				onclose={() => (showSaveDialog = false)}
 				onsave={handleSaveDialogSave}
 			/>

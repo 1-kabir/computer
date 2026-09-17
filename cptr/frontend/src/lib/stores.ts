@@ -67,6 +67,19 @@ export interface Tab {
 	permanent?: boolean;
 	badge?: number;
 	searchTarget?: FileSearchTarget;
+	/**
+	 * Cross-workspace tabs (MVP): workspace this tab's data belongs to.
+	 * Absent = the currently loaded workspace (legacy tabs).
+	 * Panes resolve data by this field, falling back to currentWorkspace.
+	 *
+	 * LIMITATIONS (documented, out of scope for MVP):
+	 * - Unified sidebar tree: the sidebar still navigates one workspace at a time.
+	 * - Live terminal/browser sessions are path-bound at creation; dragging a
+	 *   live session tab across workspaces is not supported (open a new one via
+	 *   the `open*InWorkspace` helpers instead). Only chat + file tabs are
+	 *   restored across reloads via {@link CrossWorkspacePin}.
+	 */
+	workspacePath?: string;
 }
 
 const SUPPORTED_TAB_TYPES = new Set([
@@ -128,6 +141,23 @@ export interface HomeState {
 
 export type ToolApprovalMode = 'ask' | 'auto' | 'full';
 
+/**
+ * A persisted reference to a cross-workspace tab (Feature 2 MVP).
+ * The live tab itself persists inside its host workspace's server-side layout;
+ * pins mirror the currently-open foreign tabs so future UI (e.g. a "pinned
+ * across workspaces" tray or reopen-closed affordance) has a stable source.
+ * Keyed by tab id; added when a foreign tab opens, removed when it closes.
+ */
+export interface CrossWorkspacePin {
+	tabId: string;
+	/** Session (loaded workspace path) that hosts the foreign tab. */
+	hostPath: string;
+	workspacePath: string;
+	kind: 'chat' | 'file';
+	ref: string; // chat id or absolute file path
+	label: string;
+}
+
 export interface UserPreferences {
 	theme?: Theme;
 	appearance?: AppearancePreferences;
@@ -147,6 +177,7 @@ export interface UserPreferences {
 	autoContinue?: boolean;
 	homeGroup?: EditorGroup;
 	homeState?: HomeState;
+	crossWorkspacePins?: CrossWorkspacePin[];
 	git?: {
 		identity?: {
 			name?: string;
@@ -360,6 +391,39 @@ export const autoContinue = writable(false);
 /** Saved workspace path order for sidebar drag-reorder. */
 export const workspaceOrder = writable<string[]>([]);
 
+/**
+ * Persisted refs to open cross-workspace (foreign) tabs.
+ * The live tabs persist inside their host workspace's server-side layout;
+ * pins mirror them here in UserPreferences so future UI (a pinned tray,
+ * reopen-closed affordance) has a stable source. Keyed by tab id.
+ */
+export const crossWorkspacePins = writable<CrossWorkspacePin[]>([]);
+
+function upsertCrossWorkspacePin(pin: CrossWorkspacePin): void {
+	crossWorkspacePins.update((pins) => [...pins.filter((p) => p.tabId !== pin.tabId), pin]);
+}
+
+function removeCrossWorkspacePin(tabId: string): void {
+	crossWorkspacePins.update((pins) =>
+		pins.some((p) => p.tabId === tabId) ? pins.filter((p) => p.tabId !== tabId) : pins
+	);
+}
+
+/**
+ * Workspace a tab's data belongs to: the tab's own stamp, or the currently
+ * loaded workspace for legacy tabs. Panes must resolve data by this, never
+ * by assuming the tab belongs to the host workspace.
+ */
+export function resolveTabWorkspace(tab: Tab): string {
+	return tab.workspacePath ?? get(currentWorkspace)?.path ?? '';
+}
+
+/** True when the tab shows data from a workspace other than the loaded one. */
+export function isForeignTab(tab: Tab): boolean {
+	const host = get(currentWorkspace)?.path;
+	return !!tab.workspacePath && !!host && tab.workspacePath !== host;
+}
+
 // ── Derived stores ──────────────────────────────────────────────
 
 /** @deprecated Alias for currentWorkspace. Helps migration of existing imports */
@@ -433,12 +497,45 @@ function pushTabHistory(group: EditorGroup, tabId: string): string[] {
 let _saveWsTimer: ReturnType<typeof setTimeout> | null = null;
 let _savePrefTimer: ReturnType<typeof setTimeout> | null = null;
 
+function stripForeignTabs(ws: WorkspaceState): WorkspaceState {
+	const groups = ws.groups
+		.map((g) => {
+			const tabs = g.tabs.filter((t) => !t.workspacePath || t.workspacePath === ws.path);
+			const liveIds = new Set(tabs.map((t) => t.id));
+			return {
+				...g,
+				tabs,
+				tabHistory: (g.tabHistory ?? []).filter((id) => liveIds.has(id)),
+				activeTabId: tabs.some((t) => t.id === g.activeTabId) ? g.activeTabId : (tabs[0]?.id ?? '')
+			};
+		})
+		.filter((g) => g.tabs.length > 0);
+	const kept = groups.length > 0 ? groups : [createDefaultGroup()];
+	return {
+		...ws,
+		groups: kept,
+		activeGroupId: kept.some((g) => g.id === ws.activeGroupId) ? ws.activeGroupId : kept[0].id,
+		layout: normalizeLayout(
+			ws.layout,
+			kept,
+			ws.splitDirection ?? 'horizontal',
+			ws.splitRatio ?? 0.5
+		)
+	};
+}
+
 function persistWorkspace(): void {
 	if (_saveWsTimer) clearTimeout(_saveWsTimer);
 	_saveWsTimer = setTimeout(() => {
 		const ws = get(currentWorkspace);
 		if (!ws) return;
-		saveWorkspaceState(ws.path, ws as unknown as Record<string, unknown>).catch(() => {});
+		// Foreign (cross-workspace) tabs are session-only: strip them so each
+		// workspace's server-side layout keeps only its own tabs. Their refs
+		// persist separately via crossWorkspacePins in UserPreferences.
+		const stripped = stripForeignTabs(ws);
+		saveWorkspaceState(stripped.path, stripped as unknown as Record<string, unknown>).catch(
+			() => {}
+		);
 	}, 300);
 }
 
@@ -467,7 +564,8 @@ function persistPreferences(): void {
 			expandToolDetails: get(expandToolDetails),
 			bridgeNotificationsMuted: get(bridgeNotificationsMuted),
 			autoContinue: get(autoContinue),
-			homeState: get(homeState)
+			homeState: get(homeState),
+			crossWorkspacePins: get(crossWorkspacePins)
 		};
 		savePreferences(prefs as unknown as Record<string, unknown>).catch(() => {});
 	}, 300);
@@ -479,6 +577,9 @@ function subscribeForPersistence() {
 	_subscribed = true;
 	currentWorkspace.subscribe(() => {
 		if (get(stateLoaded)) persistWorkspace();
+	});
+	crossWorkspacePins.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
 	});
 	homeState.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
@@ -658,6 +759,21 @@ export async function loadPreferences(): Promise<void> {
 				...defaultPwaPreferences,
 				...(pwaPrefs as PwaPreferences)
 			});
+		const savedPins = prefs.crossWorkspacePins;
+		if (Array.isArray(savedPins)) {
+			crossWorkspacePins.set(
+				savedPins.filter(
+					(pin): pin is CrossWorkspacePin =>
+						!!pin &&
+						typeof pin.tabId === 'string' &&
+						typeof pin.hostPath === 'string' &&
+						typeof pin.workspacePath === 'string' &&
+						(pin.kind === 'chat' || pin.kind === 'file') &&
+						typeof pin.ref === 'string' &&
+						typeof pin.label === 'string'
+				)
+			);
+		}
 	} catch {
 		// First run, no preferences yet
 	}
@@ -764,28 +880,85 @@ export async function loadWorkspace(path: string): Promise<void> {
 				? ws.activeGroupId
 				: (groups[0]?.id ?? 'default');
 
-			currentWorkspace.set({
-				...ws,
-				path: canonicalWorkspacePath,
-				groups,
-				activeGroupId,
-				layout: normalizeLayout(
-					ws.layout,
+			currentWorkspace.set(
+				restoreCrossWorkspaceTabs({
+					...ws,
+					path: canonicalWorkspacePath,
 					groups,
-					ws.splitDirection ?? 'horizontal',
-					ws.splitRatio ?? 0.5
-				),
-				splitDirection: ws.splitDirection ?? 'horizontal',
-				splitRatio: ws.splitRatio ?? 0.5,
-				fileBrowserCwd: ws.fileBrowserCwd ?? canonicalWorkspacePath
-			});
+					activeGroupId,
+					layout: normalizeLayout(
+						ws.layout,
+						groups,
+						ws.splitDirection ?? 'horizontal',
+						ws.splitRatio ?? 0.5
+					),
+					splitDirection: ws.splitDirection ?? 'horizontal',
+					splitRatio: ws.splitRatio ?? 0.5,
+					fileBrowserCwd: ws.fileBrowserCwd ?? canonicalWorkspacePath
+				})
+			);
 		} else {
 			// First time opening this workspace, create defaults
-			currentWorkspace.set(createDefaultWorkspace(canonicalWorkspacePath));
+			currentWorkspace.set(
+				restoreCrossWorkspaceTabs(createDefaultWorkspace(canonicalWorkspacePath))
+			);
 		}
 	} catch {
 		currentWorkspace.set(null);
 	}
+}
+
+/**
+ * Re-attach persisted cross-workspace tabs (chat/file only) hosted by this
+ * session after a reload. Foreign pins whose host matches the loaded path
+ * are re-created in the first group; pins with stale ids/refs were already
+ * filtered at load. Terminal/browser sessions are path-bound and NOT
+ * restored here (documented MVP limitation) — their old tabs stay closed.
+ */
+function restoreCrossWorkspaceTabs(state: WorkspaceState): WorkspaceState {
+	const pins = get(crossWorkspacePins).filter(
+		(pin) =>
+			pin.hostPath === state.path &&
+			(pin.kind === 'chat' || pin.kind === 'file') &&
+			((pin.kind === 'chat' && !pin.ref.startsWith('new-') && !pin.ref.startsWith('pending-')) ||
+				pin.kind === 'file')
+	);
+	if (!pins.length) return state;
+	const target = state.groups[0];
+	if (!target) return state;
+	const existingRefs = new Set(
+		target.tabs.map((t) =>
+			t.type === 'chat' ? `chat:${t.path}` : t.type === 'file' ? `file:${t.filePath}` : ''
+		)
+	);
+	const restored: Tab[] = [];
+	for (const pin of pins) {
+		const key = `${pin.kind}:${pin.ref}`;
+		if (existingRefs.has(key)) continue;
+		existingRefs.add(key);
+		restored.push(
+			pin.kind === 'chat'
+				? {
+						id: nextId(),
+						type: 'chat',
+						label: pin.label,
+						path: pin.ref,
+						workspacePath: pin.workspacePath
+					}
+				: {
+						id: nextId(),
+						type: 'file',
+						label: pin.label,
+						filePath: pin.ref,
+						workspacePath: pin.workspacePath
+					}
+		);
+	}
+	if (!restored.length) return state;
+	return {
+		...state,
+		groups: state.groups.map((g, i) => (i === 0 ? { ...g, tabs: [...g.tabs, ...restored] } : g))
+	};
 }
 
 // ── Initialize everything (called once at app startup) ──────────
@@ -1000,6 +1173,19 @@ function updateGroupTabs(
 }
 
 // ── Tab actions (operate on the active group by default) ────────
+
+/** Update a chat tab's id/label after the backend assigns a real chat id. */
+export function updateWorkspaceChatTab(
+	tabId: string,
+	chatId: string,
+	label: string,
+	groupId?: string
+): void {
+	const gid = groupId ?? get(currentWorkspace)?.activeGroupId;
+	updateGroupTabs(gid, (tabs) => ({
+		tabs: tabs.map((t) => (t.id === tabId ? { ...t, path: chatId, label } : t))
+	}));
+}
 
 export function reorderTabs(oldIndex: number, newIndex: number, groupId?: string): void {
 	updateGroupTabs(groupId, (tabs) => {
@@ -1232,17 +1418,23 @@ export function openChatTab(chatId?: string, targetGroupId?: string): void {
 	const group = ws.groups.find((g) => g.id === gid);
 	if (!group) return;
 
-	// If chatId provided, reuse existing tab
+	// If chatId provided, reuse an existing LOCAL tab for it (never hijack a
+	// foreign tab: same chat id in another workspace is different data).
 	if (chatId) {
-		const existing = group.tabs.find((t) => t.type === 'chat' && t.path === chatId);
+		const existing = group.tabs.find(
+			(t) => t.type === 'chat' && t.path === chatId && !t.workspacePath
+		);
 		if (existing) {
 			setActiveTab(existing.id, gid);
 			return;
 		}
 	} else {
-		// No chatId — reuse an existing new/pending chat tab if one is open
+		// No chatId — reuse an existing new/pending LOCAL chat tab if one is open
 		const existing = group.tabs.find(
-			(t) => t.type === 'chat' && (t.path?.startsWith('new-') || t.path?.startsWith('pending-'))
+			(t) =>
+				t.type === 'chat' &&
+				!t.workspacePath &&
+				(t.path?.startsWith('new-') || t.path?.startsWith('pending-'))
 		);
 		if (existing) {
 			setActiveTab(existing.id, gid);
@@ -1261,6 +1453,127 @@ export function openChatTab(chatId?: string, targetGroupId?: string): void {
 		tabs: [...tabs, newTab],
 		activeTabId: newTab.id
 	}));
+}
+
+/**
+ * Open a chat from a DIFFERENT workspace side-by-side in the current view
+ * (cross-workspace tab strip MVP). The tab is stamped with `workspacePath`
+ * so its ChatPanel loads/sends against that workspace; the tab is pinned in
+ * `crossWorkspacePins` and stripped from the host workspace's server-side
+ * layout on save (session-only).
+ *
+ * Out of scope: live terminal/browser sessions are path-bound — only chat
+ * (+ file via {@link openFileTabInWorkspace}) can be opened cross-workspace.
+ */
+export function openChatTabInWorkspace(
+	chatId: string | undefined,
+	workspacePath: string,
+	targetGroupId?: string
+): void {
+	const ws = get(currentWorkspace);
+	if (!ws) return;
+	const hostPath = ws.path;
+	if (!workspacePath || workspacePath === hostPath) {
+		openChatTab(chatId, targetGroupId);
+		return;
+	}
+
+	const gid = targetGroupId ?? ws.activeGroupId;
+	const group = ws.groups.find((g) => g.id === gid);
+	if (!group) return;
+
+	if (chatId) {
+		const existing = group.tabs.find(
+			(t) => t.type === 'chat' && t.path === chatId && t.workspacePath === workspacePath
+		);
+		if (existing) {
+			setActiveTab(existing.id, gid);
+			return;
+		}
+	}
+
+	const newTab: Tab = {
+		id: nextId(),
+		type: 'chat',
+		label: chatId ? 'Chat' : 'New Chat',
+		path: chatId || `new-${Date.now()}`,
+		workspacePath
+	};
+	upsertCrossWorkspacePin({
+		tabId: newTab.id,
+		hostPath,
+		workspacePath,
+		kind: 'chat',
+		ref: newTab.path!,
+		label: newTab.label
+	});
+
+	updateGroupTabs(gid, (tabs) => ({
+		tabs: [...tabs, newTab],
+		activeTabId: newTab.id
+	}));
+}
+
+/**
+ * Open a file from a DIFFERENT workspace side-by-side (MVP companion to
+ * {@link openChatTabInWorkspace}). The FileEditor resolves git/workspace
+ * context from the tab's `workspacePath` (see `workspaceRoot` prop).
+ */
+export function openFileTabInWorkspace(
+	filePath: string,
+	workspacePath: string,
+	targetGroupId?: string
+): void {
+	const ws = get(currentWorkspace);
+	if (!ws) return;
+	if (!workspacePath || workspacePath === ws.path) {
+		openFileTab(filePath, targetGroupId);
+		return;
+	}
+
+	const gid = targetGroupId ?? ws.activeGroupId;
+	const group = ws.groups.find((g) => g.id === gid);
+	if (!group) return;
+
+	const existing = group.tabs.find(
+		(t) => t.type === 'file' && t.filePath === filePath && t.workspacePath === workspacePath
+	);
+	if (existing) {
+		setActiveTab(existing.id, gid);
+		return;
+	}
+
+	const newTab: Tab = {
+		id: nextId(),
+		type: 'file',
+		label: getPathDisplayName(filePath, filePath),
+		filePath,
+		workspacePath
+	};
+	upsertCrossWorkspacePin({
+		tabId: newTab.id,
+		hostPath: ws.path,
+		workspacePath,
+		kind: 'file',
+		ref: filePath,
+		label: newTab.label
+	});
+
+	updateGroupTabs(gid, (tabs) => ({
+		tabs: [...tabs, newTab],
+		activeTabId: newTab.id
+	}));
+}
+
+/** Keep a foreign tab's persisted pin in sync after renames/title loads. No-op when unchanged. */
+export function syncCrossWorkspacePin(tabId: string, label: string, ref?: string): void {
+	crossWorkspacePins.update((pins) => {
+		const pin = pins.find((p) => p.tabId === tabId);
+		if (!pin) return pins;
+		const nextRef = ref ?? pin.ref;
+		if (pin.label === label && pin.ref === nextRef) return pins;
+		return pins.map((p) => (p.tabId === tabId ? { ...p, label, ref: nextRef } : p));
+	});
 }
 
 export async function closeTab(
@@ -1312,6 +1625,9 @@ export async function closeTab(
 			return n;
 		});
 	}
+
+	// Drop the persisted cross-workspace pin for foreign tabs
+	if (tab.workspacePath) removeCrossWorkspacePin(tabId);
 
 	currentWorkspace.update((ws) => {
 		if (!ws) return ws;
