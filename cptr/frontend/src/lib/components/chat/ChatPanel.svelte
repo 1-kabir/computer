@@ -74,6 +74,13 @@
 	import { tooltip } from '$lib/tooltip';
 	import { toast } from 'svelte-sonner';
 	import { t } from '$lib/i18n';
+	import {
+		saveDraft,
+		loadDraft,
+		clearDraft,
+		migrateDraft,
+		type ChatDraft
+	} from '$lib/stores/drafts';
 
 	type PreparedTtsAudio = {
 		promise: Promise<Blob>;
@@ -172,6 +179,97 @@
 	let unbindSocketListeners: (() => void) | null = null;
 	let commandSessionsTimer: ReturnType<typeof setInterval> | null = null;
 
+	// ── Draft autosave ──────────────────────────────────────────
+	// TipTap content must survive panel/tab resize, remount, and reload.
+	// Drafts live in localStorage only (see lib/stores/drafts), debounced,
+	// keyed per workspace+chat. Never modal, never autofocus-stealing.
+	let draftNudge = $state<ChatDraft | null>(null);
+	let draftTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/** Scope key for the current draft: real chat id, else the tab id. */
+	function draftScopeId(): string | null {
+		if (chatId) return chatId;
+		// New chats use a `new-*` tab path until the first send assigns a chat id.
+		if (tabId) return tabId;
+		return null;
+	}
+
+	function clearCurrentDraft() {
+		const scopeId = draftScopeId();
+		if (!scopeId) return;
+		clearDraft(workspace, scopeId);
+		draftNudge = null;
+	}
+
+	function refreshDraftNudge() {
+		// Only nudge when the editor is empty (a remount/reload wiped content).
+		if (inputText.trim()) {
+			draftNudge = null;
+			return;
+		}
+		const scopeId = draftScopeId();
+		if (!scopeId) {
+			draftNudge = null;
+			return;
+		}
+		draftNudge = loadDraft(workspace, scopeId);
+	}
+
+	function restoreDraft() {
+		if (!draftNudge) return;
+		inputText = draftNudge.text;
+		draftNudge = null;
+		chatInputEl?.focus();
+	}
+
+	function discardDraft() {
+		clearCurrentDraft();
+	}
+
+	$effect(() => {
+		// Debounced autosave (~500ms) on every input change.
+		const text = inputText;
+		if (text.trim()) {
+			// Typing dismisses a pending restore nudge immediately.
+			draftNudge = null;
+		}
+		if (draftTimer) clearTimeout(draftTimer);
+		draftTimer = setTimeout(() => {
+			draftTimer = null;
+			// Don't wipe a restorable draft: when the editor is empty because of
+			// a remount/reload (nudge pending), keep the stored draft until the
+			// user restores or discards it.
+			if (!text.trim() && draftNudge) return;
+			const scopeId = draftScopeId();
+			if (scopeId) saveDraft(workspace, scopeId, text);
+		}, 500);
+		return () => {
+			if (draftTimer) {
+				clearTimeout(draftTimer);
+				draftTimer = null;
+			}
+		};
+	});
+
+	$effect(() => {
+		// Migrate the provisional tab-scoped draft once a real chat id lands,
+		// and re-check the nudge whenever the viewed chat changes.
+		const id = chatId;
+		if (id && tabId) migrateDraft(workspace, tabId, id);
+		refreshDraftNudge();
+	});
+
+	function formatDraftTime(savedAt: number): string {
+		try {
+			return new Date(savedAt).toLocaleTimeString([], {
+				hour: '2-digit',
+				minute: '2-digit'
+			});
+		} catch {
+			return '';
+		}
+	}
+
 	onMount(() => {
 		if (initialChatId || typeof sessionStorage === 'undefined') return;
 		const key = `cptr:intent:chatDraft:${workspace}`;
@@ -180,6 +278,7 @@
 			inputText = draft;
 			sessionStorage.removeItem(key);
 		}
+		refreshDraftNudge();
 	});
 
 	// ── Windowed rendering ──────────────────────────────────────
@@ -384,8 +483,7 @@
 		// state may still show streaming=false for a beat. Continuing then
 		// would race the dequeued batch as a competing sibling branch.
 		if (sending || streaming || queuedMessages.length > 0) return;
-		const parentId =
-			activePath.length > 0 ? activePath[activePath.length - 1].msg.id : null;
+		const parentId = activePath.length > 0 ? activePath[activePath.length - 1].msg.id : null;
 		if (!selectedModel) return;
 		sending = true;
 		try {
@@ -1040,6 +1138,7 @@
 			(_: string, id: string, label: string) => `[${label}](file://${id})`
 		);
 		inputText = '';
+		clearCurrentDraft();
 		chatInputEl?.clearUploads();
 		autoScroll = true;
 		await tick();
@@ -1101,6 +1200,8 @@
 					}
 				} catch (e) {
 					console.error('[chat] send (queue) error', e);
+					// Restore the composed text so nothing is lost on failure.
+					inputText = text;
 				} finally {
 					sending = false;
 					chatInputEl?.focus();
@@ -1145,6 +1246,7 @@
 
 			// Swap optimistic temp msg with real messages from backend.
 			chatId = result.chat_id;
+			if (isNew && tabId) migrateDraft(workspace, tabId, result.chat_id);
 			const withoutTemp = allMessages.filter((m) => m.id !== tempId);
 			if (result.user_message && result.assistant_message) {
 				allMessages = [...withoutTemp, result.user_message, result.assistant_message];
@@ -1160,6 +1262,8 @@
 			console.error('[chat] send error', e);
 			allMessages = allMessages.filter((m) => m.id !== tempId);
 			currentMessageId = parentId;
+			// Restore the composed text so nothing is lost on failure.
+			inputText = text;
 			throw e;
 		} finally {
 			sending = false;
@@ -1893,6 +1997,34 @@
 					</h1>
 				</div>
 
+				{#if draftNudge}
+					<div class="pb-1.5" role="status">
+						<div
+							class="app-surface app-interactive flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs text-gray-600 dark:text-gray-400"
+						>
+							<span class="truncate"
+								>{$t('chat.draftRestore', {
+									time: formatDraftTime(draftNudge.savedAt)
+								})}</span
+							>
+							<button
+								type="button"
+								class="ml-auto shrink-0 rounded-md px-2 py-0.5 text-[0.6875rem] font-medium transition-colors"
+								style="background: color-mix(in oklab, var(--app-accent) 12%, transparent); color: var(--app-accent);"
+								onclick={restoreDraft}
+							>
+								{$t('chat.draftRestoreAction')}
+							</button>
+							<button
+								type="button"
+								class="shrink-0 rounded-md px-2 py-0.5 text-[0.6875rem] font-medium text-gray-500 hover:bg-gray-500/10 dark:text-gray-400 transition-colors"
+								onclick={discardDraft}
+							>
+								{$t('chat.draftDiscard')}
+							</button>
+						</div>
+					</div>
+				{/if}
 				<ChatInput
 					bind:this={chatInputEl}
 					bind:inputText
@@ -2027,6 +2159,34 @@
 		<!-- Input area -->
 		<div class="px-4 py-3" style="background: var(--app-bg);">
 			<div class="{$widescreenMode ? 'max-w-full' : 'max-w-2xl'} mx-auto w-full relative">
+				{#if draftNudge}
+					<div class="pb-1.5" role="status">
+						<div
+							class="app-surface app-interactive flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs text-gray-600 dark:text-gray-400"
+						>
+							<span class="truncate"
+								>{$t('chat.draftRestore', {
+									time: formatDraftTime(draftNudge.savedAt)
+								})}</span
+							>
+							<button
+								type="button"
+								class="ml-auto shrink-0 rounded-md px-2 py-0.5 text-[0.6875rem] font-medium transition-colors"
+								style="background: color-mix(in oklab, var(--app-accent) 12%, transparent); color: var(--app-accent);"
+								onclick={restoreDraft}
+							>
+								{$t('chat.draftRestoreAction')}
+							</button>
+							<button
+								type="button"
+								class="shrink-0 rounded-md px-2 py-0.5 text-[0.6875rem] font-medium text-gray-500 hover:bg-gray-500/10 dark:text-gray-400 transition-colors"
+								onclick={discardDraft}
+							>
+								{$t('chat.draftDiscard')}
+							</button>
+						</div>
+					</div>
+				{/if}
 				{#if !autoScroll && activePath.length > 0}
 					<div
 						class="absolute -top-10 left-0 right-0 pr-2 flex justify-end z-30 pointer-events-none"
