@@ -196,11 +196,20 @@ def _serialize_record(record: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def list_async_subagents(parent_chat_id: str | None = None) -> list[dict[str, Any]]:
-    """Return a serializable snapshot of records, optionally scoped to one parent chat."""
+def list_async_subagents(
+    parent_chat_id: str | None = None, *, user_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Return a serializable snapshot of records, optionally scoped to one parent chat.
+
+    user_id scoping is fail-closed (records without a matching user_id are
+    excluded) so the global /api/chats/active panel never leaks one user's
+    background work to another.
+    """
     snapshot = []
     for record in _records.values():
         if parent_chat_id and record.get("parent_chat_id") != parent_chat_id:
+            continue
+        if user_id is not None and record.get("user_id") != user_id:
             continue
         snapshot.append(_serialize_record(record))
     return snapshot
