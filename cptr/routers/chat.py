@@ -630,6 +630,59 @@ async def get_usage(request: Request, days: int | None = Query(None, ge=7, le=73
     }
 
 
+# ── Active chats + running subagents (global running-agents panel) ──
+# NOTE: Must be declared before /{chat_id} routes to avoid 'active' being
+# treated as a chat_id.
+
+
+@router.get("/active")
+async def list_active_chats(request: Request):
+    """Return every running agent in one payload for the global panel.
+
+    active_chats: chats with a live task (via get_active_tasks(), which also
+    supplies the running message_id the Stop action needs).
+    subagents: starting/running background subagents via list_async_subagents()
+    (already a JSON-safe whitelist projection — records hold live runtime
+    objects that must never reach a response).
+    """
+    user_id = _get_user(request)
+
+    from cptr.utils.chat_task import get_active_tasks
+
+    active_tasks = get_active_tasks()
+    chats = await Chat.get_by_ids(list(active_tasks)) if active_tasks else []
+
+    active_chats = []
+    for chat in chats:
+        if chat.user_id != user_id:
+            continue
+        meta = chat.meta if isinstance(chat.meta, dict) else {}
+        if is_internal_chat(meta):
+            continue
+        workspace = meta.get("workspace") or ""
+        if not isinstance(workspace, str):
+            workspace = ""
+        active_chats.append(
+            {
+                "chat_id": chat.id,
+                "workspace": workspace,
+                "title": chat.title,
+                "updated_at": chat.updated_at,
+                "message_id": active_tasks.get(chat.id),
+            }
+        )
+    active_chats.sort(key=lambda c: c["updated_at"] or 0, reverse=True)
+
+    from cptr.utils.async_subagents import list_async_subagents
+
+    subagents = [
+        record
+        for record in list_async_subagents(user_id=user_id)
+        if record.get("status") in {"starting", "running"}
+    ]
+    return {"active_chats": active_chats, "subagents": subagents}
+
+
 async def _fetch_provider_models(conn: dict) -> list[str] | None:
     """Discover models from a provider's /models endpoint."""
     import httpx

@@ -51,6 +51,7 @@ export interface SubagentInfo {
 	// Human-readable task description; null for legacy/edge records — render with a fallback.
 	task: string | null;
 	status: SubagentStatus;
+	parent_chat_id?: string | null;
 	subagent_chat_id?: string | null;
 	error?: string | null;
 	dispatched_at: number;
@@ -229,8 +230,7 @@ export const answerAskUser = (
 	callId: string,
 	answers: Record<string, string>,
 	timedOut = false
-) =>
-	resolveToolCall(chatId, messageId, callId, 'answer', { answers, timedOut });
+) => resolveToolCall(chatId, messageId, callId, 'answer', { answers, timedOut });
 
 export const cancelTask = (chatId: string, messageId: string) =>
 	fetchJSON(`/api/chats/${chatId}/messages/${messageId}/cancel`, { method: 'POST' });
@@ -250,6 +250,23 @@ export const cancelChatSubagent = (chatId: string, delegationId: string) =>
 	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}/subagents/${delegationId}/cancel`, {
 		method: 'POST'
 	});
+
+// ── Global running-agents panel ─────────────────────────────
+
+export interface ActiveChatEntry {
+	chat_id: string;
+	workspace: string;
+	title: string;
+	updated_at: number | null;
+	message_id: string | null;
+}
+
+export interface ActiveAgentsPayload {
+	active_chats: ActiveChatEntry[];
+	subagents: SubagentInfo[];
+}
+
+export const listActiveAgents = () => fetchJSON<ActiveAgentsPayload>(`/api/chats/active`);
 
 export const updateCurrentMessage = (chatId: string, messageId: string) =>
 	fetchJSON<{ ok: boolean }>(`/api/chats/${chatId}/current`, jsonBody({ message_id: messageId }));

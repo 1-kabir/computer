@@ -485,6 +485,22 @@ def get_active_chat_ids() -> set[str]:
     return {cid for mid, cid in _task_chat.items() if mid in _tasks and not _tasks[mid].done()}
 
 
+def get_active_tasks() -> dict[str, str]:
+    """Return mapping of chat_id -> running message_id for active tasks.
+
+    Used by GET /api/chats/active so the global running-agents panel can
+    offer Stop per chat (cancelTask needs the message_id). When several
+    tasks map to one chat the last-seen wins; in practice one runs at a time
+    (queued inputs are drained sequentially).
+    """
+    active: dict[str, str] = {}
+    for mid, cid in _task_chat.items():
+        task = _tasks.get(mid)
+        if task is not None and not task.done():
+            active[cid] = mid
+    return active
+
+
 def _plain_message_text(content) -> str:
     if isinstance(content, list):
         return " ".join(

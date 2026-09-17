@@ -4,6 +4,7 @@
 	import { t } from '$lib/i18n';
 	import { keybindings, formatChord } from '$lib/stores/keybindings';
 	import DropdownMenu from './DropdownMenu.svelte';
+	import RunningAgentsModal from './RunningAgentsModal.svelte';
 
 	interface Props {
 		onsettings: (tab?: string) => void;
@@ -12,12 +13,18 @@
 
 	let { onsettings, onsysteminfo }: Props = $props();
 	let showMenu = $state(false);
+	let showRunningAgents = $state(false);
 	let menuButtonEl: HTMLButtonElement | undefined = $state();
 	const FEATURE_REQUEST_URL = 'https://github.com/open-webui/computer/issues/new/choose';
 
 	function openSettings(tab?: string) {
 		showMenu = false;
 		onsettings(tab);
+	}
+
+	function openRunningAgents() {
+		showMenu = false;
+		showRunningAgents = true;
 	}
 
 	function openSystemInfo() {
@@ -81,6 +88,11 @@
 				onclick: openSystemInfo
 			},
 			{
+				label: $t('agents.runningTitle'),
+				icon: 'spark',
+				onclick: openRunningAgents
+			},
+			{
 				label: $t('sidebar.suggestFeature'),
 				icon: 'external-link',
 				onclick: () => window.open(FEATURE_REQUEST_URL, '_blank', 'noopener,noreferrer')
@@ -90,4 +102,8 @@
 		]}
 		onclose={() => (showMenu = false)}
 	/>
+{/if}
+
+{#if showRunningAgents}
+	<RunningAgentsModal onclose={() => (showRunningAgents = false)} />
 {/if}
