@@ -145,6 +145,7 @@ export interface UserPreferences {
 	expandToolDetails?: boolean;
 	bridgeNotificationsMuted?: boolean;
 	autoContinue?: boolean;
+	showTurnTiming?: boolean;
 	homeGroup?: EditorGroup;
 	homeState?: HomeState;
 	git?: {
@@ -356,6 +357,8 @@ export const widescreenMode = writable(false);
 export const expandToolDetails = writable(false);
 /** Auto-send a continue message when the harness detects a truncated provider response. */
 export const autoContinue = writable(false);
+/** Show per-turn duration beside timestamps plus Time/TPS rows in the usage tooltip. */
+export const showTurnTiming = writable(false);
 
 /** Saved workspace path order for sidebar drag-reorder. */
 export const workspaceOrder = writable<string[]>([]);
@@ -467,6 +470,7 @@ function persistPreferences(): void {
 			expandToolDetails: get(expandToolDetails),
 			bridgeNotificationsMuted: get(bridgeNotificationsMuted),
 			autoContinue: get(autoContinue),
+			showTurnTiming: get(showTurnTiming),
 			homeState: get(homeState)
 		};
 		savePreferences(prefs as unknown as Record<string, unknown>).catch(() => {});
@@ -528,6 +532,9 @@ function subscribeForPersistence() {
 	autoContinue.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
+	showTurnTiming.subscribe(() => {
+		if (get(stateLoaded)) persistPreferences();
+	});
 	bridgeNotificationsMuted.subscribe(() => {
 		if (get(stateLoaded)) persistPreferences();
 	});
@@ -578,6 +585,7 @@ export async function loadPreferences(): Promise<void> {
 		if (prefs.expandToolDetails !== undefined)
 			expandToolDetails.set(prefs.expandToolDetails as boolean);
 		if (prefs.autoContinue !== undefined) autoContinue.set(prefs.autoContinue as boolean);
+		if (prefs.showTurnTiming !== undefined) showTurnTiming.set(prefs.showTurnTiming as boolean);
 		if (prefs.bridgeNotificationsMuted !== undefined)
 			bridgeNotificationsMuted.set(prefs.bridgeNotificationsMuted as boolean);
 		const savedHomeGroup = prefs.homeGroup as EditorGroup | undefined;
