@@ -6,14 +6,19 @@
 		workspaceList,
 		addWorkspace,
 		loadWorkspace,
+		activeTab,
 		gitReviewOpen,
 		setActiveGroup,
 		setSplitRatio,
 		moveTabToNewSplit,
 		openChatTab,
+		openChatTabInWorkspace,
+		updateWorkspaceChatTab,
 		openFileTab,
 		openTerminalTab,
 		setFileBrowserCwd,
+		syncCrossWorkspacePin,
+		resolveTabWorkspace,
 		appVersion,
 		showChangelog,
 		showSearch,
@@ -390,7 +395,15 @@
 				break;
 			case 'openChat':
 				if (targetWorkspace) {
-					openChatTab(intent.chatId ?? undefined);
+					// Chat ids are per-workspace server-side (loaded from `?workspace=`).
+					// A chatId for a foreign workspace opens side-by-side instead of
+					// hijacking a same-id local tab.
+					const hostPath = get(currentWorkspace)?.path;
+					if (hostPath && targetWorkspace !== hostPath) {
+						openChatTabInWorkspace(intent.chatId ?? undefined, targetWorkspace);
+					} else {
+						openChatTab(intent.chatId ?? undefined);
+					}
 				} else if (intent.chatId) {
 					const chat = await getChat(intent.chatId).catch(() => null);
 					const chatWorkspace = chat?.chat.meta?.workspace;
@@ -555,6 +568,39 @@
 			currentWorkspace.set(null);
 			processIntentParams();
 		}
+	});
+
+	// ── Cross-workspace tabs: reflect the active tab in the URL ──
+	// The URL always deep-links the ACTIVE tab (`?workspace=<tab-ws>&chatId=`
+	// for chats, `&file=` for files, bare workspace otherwise), so a reload or
+	// a shared link lands on what you're looking at. Uses raw
+	// history.replaceState — never goto — so switching tabs never triggers the
+	// workspace-load effect above (no reload, no session loss). Caveat: raw
+	// replaceState bypasses SvelteKit, so $page.url stays stale until the next
+	// real navigation; components reading $page.url (e.g. SearchModal) may lag
+	// one tab-switch behind. Follow-up: centralize URL sync behind goto with a
+	// suppress-load token.
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		const ws = $currentWorkspace;
+		if (!ws) return;
+		const tab = $activeTab;
+		const tabWs = tab?.workspacePath ?? ws.path;
+		const params = new URLSearchParams();
+		params.set('workspace', tabWs);
+		if (
+			tab?.type === 'chat' &&
+			tab.path &&
+			!tab.path.startsWith('new-') &&
+			!tab.path.startsWith('pending-')
+		) {
+			params.set('chatId', tab.path);
+		} else if (tab?.type === 'file' && tab.filePath && !tab.filePath.startsWith('untitled:')) {
+			params.set('file', tab.filePath);
+		}
+		const next = `/?${params.toString()}`;
+		const current = window.location.pathname + window.location.search;
+		if (current !== next) history.replaceState(history.state, '', next);
 	});
 
 	$effect(() => {
@@ -1448,19 +1494,24 @@
 						tabId={tab.id}
 						edit={tab.edit === true}
 						searchTarget={tab.searchTarget}
+						workspaceRoot={resolveTabWorkspace(tab)}
 					/>
 				</div>
 			{/each}
 			{#each group.tabs.filter((tab) => tab.type === 'chat') as tab (tab.id)}
 				<div class="persisted-tab" class:persisted-tab-hidden={tab.id !== group.activeTabId}>
 					<ChatPanel
-						workspace={$currentWorkspace!.path}
+						workspace={resolveTabWorkspace(tab)}
 						chatId={tab.path?.startsWith('new-') || tab.path?.startsWith('pending-')
 							? undefined
 							: tab.path}
 						tabId={tab.id}
 						active={tab.id === group.activeTabId}
 						onopenchat={(chatId) => openChatTab(chatId, group.id)}
+						ontabupdate={(tabId, chatId, label) => {
+							syncCrossWorkspacePin(tabId, label, chatId);
+							updateWorkspaceChatTab(tabId, chatId, label, group.id);
+						}}
 					/>
 				</div>
 			{/each}

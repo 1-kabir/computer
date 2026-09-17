@@ -6,7 +6,8 @@
 		reorderWorkspaces,
 		sidebarOpen,
 		activeTab,
-		currentWorkspace
+		currentWorkspace,
+		openChatTabInWorkspace
 	} from '$lib/stores';
 	import { chatEnabled, updateChatStatuses } from '$lib/stores/chat';
 	import { socketStore } from '$lib/stores/socket.svelte';
@@ -117,6 +118,20 @@
 
 	function openChat(chatId: string, wsPath: string) {
 		goto(`/?workspace=${encodeURIComponent(wsPath)}&chatId=${encodeURIComponent(chatId)}`);
+		closeMobileSidebar();
+	}
+
+	/**
+	 * Cross-workspace tab strip (MVP): pin a chat from another workspace
+	 * side-by-side with the currently loaded one. Same-workspace chats keep
+	 * the classic full-navigation behavior.
+	 */
+	function openChatHere(chatId: string, wsPath: string) {
+		if (!$currentWorkspace || wsPath === $currentWorkspace.path) {
+			openChat(chatId, wsPath);
+			return;
+		}
+		openChatTabInWorkspace(chatId, wsPath);
 		closeMobileSidebar();
 	}
 
@@ -484,6 +499,15 @@
 		anchor={chatMenu.anchor}
 		align="end"
 		items={[
+			...(chatMenu.wsPath !== $currentWorkspace?.path && $currentWorkspace
+				? [
+						{
+							label: $t('sidebar.openHere'),
+							icon: 'split-horizontal',
+							onclick: () => openChatHere(chatMenu!.chatId, chatMenu!.wsPath)
+						}
+					]
+				: []),
 			{
 				label: $t('files.copyPath'),
 				icon: 'copy',

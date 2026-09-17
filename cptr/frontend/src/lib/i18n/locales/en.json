@@ -53,6 +53,7 @@
 	"sidebar.workspaceOptions": "Workspace options",
 	"sidebar.closeSidebar": "Close sidebar",
 	"sidebar.showMore": "Show more",
+	"sidebar.openHere": "Open here",
 	"bar.newFile": "New File",
 	"bar.newTerminal": "New Terminal",
 	"bar.newBrowser": "Browser",
