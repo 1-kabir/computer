@@ -20,6 +20,7 @@
 	import { socketStore } from '$lib/stores/socket.svelte';
 	import { requestConfirm } from '$lib/stores/confirm';
 	import { t } from '$lib/i18n';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		onclose: () => void;
@@ -94,6 +95,8 @@
 		try {
 			await cancelTask(chat.chat_id, chat.message_id);
 			await refresh();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : String(e));
 		} finally {
 			unmarkStopping(`chat:${chat.chat_id}`);
 		}
@@ -113,12 +116,14 @@
 		try {
 			await cancelChatSubagent(chatId, subagent.delegation_id);
 			await refresh();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : String(e));
 		} finally {
 			unmarkStopping(`sub:${subagent.delegation_id}`);
 		}
 	}
 
-	function handleSocketEvent(data: { type?: string }) {
+	function handleSocketEvent(data: { type?: string; done?: boolean }) {
 		if (!data?.type) return;
 		if (data.type === 'chat:active' || data.type === 'chat:subagents' || data.done === true) {
 			void refresh();
