@@ -48,22 +48,50 @@ def load_config() -> dict:
         return _config_cache
     if CONFIG_FILE.exists():
         try:
-            # Python 3.11+
-            import tomllib
-
-            with open(CONFIG_FILE, "rb") as f:
-                _config_cache = tomllib.load(f)
-        except ImportError:
+            # Pick a TOML parser: tomllib (3.11+), tomli backport, or the
+            # minimal fallback for our simple config format. NOTE: the import
+            # fallback must happen OUTSIDE the parse try/except below — an
+            # exception raised inside an `except` block is not caught by its
+            # sibling handlers, and the old nested structure let parse errors
+            # from the tomli path escape entirely (the "500s after restart"
+            # config-corruption incident).
             try:
-                # Python 3.9-3.10 backport
-                import tomli
-
-                with open(CONFIG_FILE, "rb") as f:
-                    _config_cache = tomli.load(f)
+                import tomllib as _toml  # Python 3.11+
             except ImportError:
-                # Minimal fallback for our simple config format
+                try:
+                    import tomli as _toml  # Python 3.9-3.10 backport
+                except ImportError:
+                    _toml = None
+
+            if _toml is not None:
+                with open(CONFIG_FILE, "rb") as f:
+                    _config_cache = _toml.load(f)
+            else:
                 _config_cache = _parse_simple_toml(CONFIG_FILE.read_text())
         except Exception:
+            # Corrupt config file: back it up so the bytes are recoverable,
+            # log loudly, and start with defaults instead of silently
+            # discarding every file-based setting. A single bad write must
+            # not take the whole UI down without a trace.
+            import logging
+            import time
+
+            _logger = logging.getLogger(__name__)
+            backup = CONFIG_FILE.with_suffix(f".toml.bak-{int(time.time())}")
+            try:
+                backup.write_bytes(CONFIG_FILE.read_bytes())
+                _logger.error(
+                    "config.toml failed to parse; corrupt copy backed up to %s. "
+                    "Starting with empty config. Parse error:",
+                    backup,
+                    exc_info=True,
+                )
+            except Exception:
+                _logger.error(
+                    "config.toml failed to parse AND backing it up failed. "
+                    "Starting with empty config. Parse error:",
+                    exc_info=True,
+                )
             _config_cache = {}
     else:
         _config_cache = {}
@@ -90,11 +118,16 @@ def _parse_simple_toml(text: str) -> dict:
             elif key.startswith("'") and key.endswith("'"):
                 key = key[1:-1]
             value = value.strip()
-            # Strip quotes
+            # Strip quotes and unescape (mirrors save_config escaping)
             if value.startswith('"') and value.endswith('"'):
                 value = value[1:-1]
-                # Unescape
-                value = value.replace('\\"', '"').replace("\\\\", "\\")
+                value = (
+                    value.replace('\\"', '"')
+                    .replace("\\\\", "\\")
+                    .replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t")
+                )
             elif value.startswith("'") and value.endswith("'"):
                 value = value[1:-1]
             elif value == "true":
@@ -124,8 +157,17 @@ def save_config(config: dict):
                 # Quote keys that contain dots (e.g. "auth.signup_enabled")
                 key_str = f'"{k}"' if "." in k else k
                 if isinstance(v, str):
-                    # Escape backslashes and quotes in string values
-                    escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+                    # Escape control characters so multi-line values stay
+                    # valid TOML basic strings. Order matters: backslashes
+                    # first (so later escapes aren't double-escaped), then
+                    # quotes, then the control characters as two-char escapes.
+                    escaped = (
+                        v.replace("\\", "\\\\")
+                        .replace('"', '\\"')
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                        .replace("\t", "\\t")
+                    )
                     lines.append(f'{key_str} = "{escaped}"')
                 elif isinstance(v, bool):
                     lines.append(f"{key_str} = {'true' if v else 'false'}")
