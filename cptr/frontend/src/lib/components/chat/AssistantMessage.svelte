@@ -8,7 +8,7 @@
 	import MessageTimestamp from './MessageTimestamp.svelte';
 	import ReasoningCollapsible from './ReasoningCollapsible.svelte';
 	import ToolCallCollapsible from './ToolCallCollapsible.svelte';
-	import { currentWorkspace, openFileTab } from '$lib/stores';
+	import { currentWorkspace, openFileTab, showTurnTiming } from '$lib/stores';
 	import { ttsConfigured, ttsEnabled } from '$lib/stores/audio';
 	import { tooltip } from '$lib/tooltip';
 	import { fileIconName } from '$lib/utils/fileIcon';
@@ -24,6 +24,7 @@
 		chatId: string | null;
 		messageId: string;
 		createdAt?: number | null;
+		turnSeconds?: number | null;
 		siblingIndex?: number;
 		siblingTotal?: number;
 		speaking?: boolean;
@@ -43,6 +44,7 @@
 		chatId,
 		messageId,
 		createdAt = null,
+		turnSeconds = null,
 		siblingIndex = 0,
 		siblingTotal = 1,
 		speaking = false,
@@ -395,6 +397,31 @@
 	function formatUsageLabel(key: string): string {
 		return key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
 	}
+
+	/** Format a turn duration: <60s as Xs, else Xm Ys */
+	function formatTurnDuration(seconds: number): string {
+		const s = Math.max(0, seconds);
+		if (s < 60) return `${Math.round(s)}s`;
+		return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+	}
+
+	const showTiming = $derived($showTurnTiming && turnSeconds != null && turnSeconds >= 0);
+
+	/** Output tokens for TPS: output/completion, else total − input */
+	const tpsTokens = $derived.by((): number | null => {
+		if (!usage) return null;
+		const out = usage.output_tokens ?? usage.completion_tokens;
+		if (typeof out === 'number' && out > 0) return out;
+		const total = usage.total_tokens;
+		const input = usage.input_tokens ?? usage.prompt_tokens ?? 0;
+		if (typeof total === 'number' && total > input) return total - input;
+		return null;
+	});
+
+	const tps = $derived.by((): number | null => {
+		if (turnSeconds == null || turnSeconds <= 0 || tpsTokens == null) return null;
+		return tpsTokens / turnSeconds;
+	});
 
 	function formatUsageValue(key: string, value: number): string {
 		if (key.includes('time') || key.includes('duration') || key.includes('latency')) {
@@ -785,6 +812,22 @@
 											<span class="tabular-nums">{formatUsageValue(key, value)}</span>
 										</div>
 									{/each}
+									{#if $showTurnTiming && showTiming}
+										<div class="flex justify-between gap-4">
+											<span class="app-muted">{$t('chat.turnTime')}</span>
+											<span class="tabular-nums">{formatTurnDuration(turnSeconds!)}</span>
+										</div>
+										{#if tps != null}
+											<div class="flex justify-between gap-4">
+												<span class="app-muted">{$t('chat.turnTps')}</span>
+												<span class="tabular-nums"
+													>{tps.toLocaleString(undefined, {
+														maximumFractionDigits: 0
+													})}{' t/s'}</span
+												>
+											</div>
+										{/if}
+									{/if}
 								</div>
 								<!-- Arrow -->
 								<div
@@ -816,6 +859,12 @@
 					</button>
 				{/if}
 				<MessageTimestamp {createdAt} />
+				{#if $showTurnTiming && showTiming}
+					<span
+						class="text-[0.6875rem] tabular-nums text-gray-400 dark:text-gray-600 select-none opacity-0 transition-opacity duration-100 group-hover/timestamp-toolbar:opacity-100 group-focus-within/timestamp-toolbar:opacity-100"
+						>· {formatTurnDuration(turnSeconds!)}</span
+					>
+				{/if}
 			</div>
 		{/if}
 	{/if}

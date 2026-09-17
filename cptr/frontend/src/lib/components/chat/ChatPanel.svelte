@@ -299,6 +299,39 @@
 	});
 	const activePathIds = $derived(new Set(activePath.map(({ msg }) => msg.id)));
 
+	// ── Turn timing (server timestamps only) ───────────────────
+	// Turn seconds = assistant.created_at − nearest user ancestor.created_at.
+	// Both come from the server (ms via now_ms()); optimistic rows may use
+	// s or ms, so normalize each timestamp independently. Includes queue/idle
+	// time — documented in settings, not hidden.
+
+	function toMs(ts: number): number {
+		if (ts > 10_000_000_000_000) return ts / 1_000_000; // µs → ms
+		if (ts > 10_000_000_000) return ts; // ms
+		return ts * 1000; // s → ms
+	}
+
+	const allMsgMap = $derived(new Map(allMessages.map((m) => [m.id, m])));
+
+	function turnSecondsFor(msg: ChatMessageRow): number | null {
+		if (msg.role !== 'assistant') return null;
+		if (typeof msg.created_at !== 'number' || !msg.created_at) return null;
+		const seen = new Set<string>();
+		let cur: string | null = msg.parent_id;
+		while (cur && !seen.has(cur)) {
+			seen.add(cur);
+			const parent = allMsgMap.get(cur);
+			if (!parent) return null;
+			if (parent.role === 'user' && typeof parent.created_at === 'number' && parent.created_at) {
+				const deltaMs = toMs(msg.created_at) - toMs(parent.created_at);
+				if (deltaMs < 0) return null;
+				return deltaMs / 1000;
+			}
+			cur = parent.parent_id;
+		}
+		return null;
+	}
+
 	// ── Visible slice of the active path ────────────────────────
 	const hasHiddenMessages = $derived(activePath.length > visibleCount);
 	const visiblePath = $derived(
@@ -384,8 +417,7 @@
 		// state may still show streaming=false for a beat. Continuing then
 		// would race the dequeued batch as a competing sibling branch.
 		if (sending || streaming || queuedMessages.length > 0) return;
-		const parentId =
-			activePath.length > 0 ? activePath[activePath.length - 1].msg.id : null;
+		const parentId = activePath.length > 0 ? activePath[activePath.length - 1].msg.id : null;
 		if (!selectedModel) return;
 		sending = true;
 		try {
@@ -1976,6 +2008,7 @@
 								{chatId}
 								messageId={msg.id}
 								createdAt={msg.created_at}
+								turnSeconds={turnSecondsFor(msg)}
 								{siblingIndex}
 								siblingTotal={siblingIds.length}
 								speaking={speakingMessageId === msg.id}
