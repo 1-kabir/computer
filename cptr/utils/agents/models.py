@@ -101,6 +101,16 @@ DEFAULT_AGENT_PROFILES: list[dict[str, Any]] = [
         "default_model": "",
     },
     {
+        "id": "kilo",
+        "agent": "kilo",
+        "name": "Kilo",
+        "mode": "auto",
+        "command": "kilo",
+        "home": None,
+        "models": [],
+        "default_model": "",
+    },
+    {
         "id": "antigravity",
         "agent": "antigravity",
         "name": "Antigravity",
@@ -123,6 +133,7 @@ _VALID_AGENTS = {
     "gemini",
     "pi",
     "antigravity",
+    "kilo",
 }
 _VALID_MODES = {"auto", "enabled", "disabled"}
 _VALID_CODEX_APPROVAL = {"ask", "auto", "full"}
@@ -146,6 +157,7 @@ _AGENT_DEFAULTS: dict[str, dict[str, str]] = {
     "gemini": {"name": "Gemini", "command": "gemini", "model": ""},
     "pi": {"name": "Pi", "command": "pi", "model": ""},
     "antigravity": {"name": "Antigravity", "command": "agy", "model": ""},
+    "kilo": {"name": "Kilo", "command": "kilo", "model": ""},
 }
 
 
@@ -163,7 +175,7 @@ def normalize_agent_profile(raw: dict[str, Any]) -> dict[str, Any]:
     if agent not in _VALID_AGENTS:
         raise HTTPException(
             400,
-            "agent must be codex, claude_code, cursor, grok, opencode, cline, gemini, pi, or antigravity",
+            "agent must be codex, claude_code, cursor, grok, opencode, cline, gemini, pi, antigravity, or kilo",
         )
     defaults = _AGENT_DEFAULTS[agent]
 
@@ -240,7 +252,7 @@ def normalize_agent_profile(raw: dict[str, Any]) -> dict[str, Any]:
         )
     elif agent == "cursor":
         normalized["api_endpoint"] = str(profile.get("api_endpoint") or "").strip()
-    elif agent == "opencode":
+    elif agent == "opencode" or agent == "kilo":
         normalized["server_url"] = str(profile.get("server_url") or "").strip()
         normalized["server_password"] = str(profile.get("server_password") or "").strip()
 

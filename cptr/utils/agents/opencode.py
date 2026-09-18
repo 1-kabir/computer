@@ -31,6 +31,18 @@ _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _OPENCODE_ACTIVITY = object()
 
 
+def _config_env(profile: dict[str, Any], env: dict[str, str]) -> dict[str, str]:
+    """Isolation config env for an OpenCode-family server spawn.
+
+    Kilo (an OpenCode fork) reads KILO_CONFIG_CONTENT and no longer falls
+    back to OpenCode config locations, so a Kilo profile needs its config
+    variable set too. Setting both is harmless for real OpenCode.
+    """
+    if str(profile.get("agent") or "") == "kilo":
+        return {**env, "OPENCODE_CONFIG_CONTENT": "{}", "KILO_CONFIG_CONTENT": "{}"}
+    return {**env, "OPENCODE_CONFIG_CONTENT": "{}"}
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -94,7 +106,7 @@ async def _opencode_server(profile: dict[str, Any], workspace: str, identity=Non
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=workspace or os.getcwd(),
-        env={**env, "OPENCODE_CONFIG_CONTENT": "{}"},
+        env=_config_env(profile, env),
         preexec_fn=preexec_for(identity) if identity and identity.is_pam else None,
     )
     stderr_task = asyncio.create_task(_drain_stderr(proc))

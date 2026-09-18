@@ -1760,6 +1760,7 @@ async def run_chat_task(
             "gemini": run_gemini_agent,
             "pi": run_pi_agent,
             "antigravity": run_antigravity_agent,
+            "kilo": run_opencode_agent,
         }
         runner = runners.get(agent_target.agent)
         if runner is None:

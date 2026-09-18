@@ -51,7 +51,8 @@
 			cline: 'cline',
 			gemini: 'gemini',
 			pi: 'pi',
-			antigravity: 'agy'
+			antigravity: 'agy',
+			kilo: 'kilo'
 		}[agent];
 	}
 
@@ -65,7 +66,8 @@
 			cline: 'Cline',
 			gemini: 'Gemini',
 			pi: 'Pi',
-			antigravity: 'Antigravity'
+			antigravity: 'Antigravity',
+			kilo: 'Kilo'
 		}[agent];
 	}
 </script>
@@ -138,6 +140,7 @@
 					<option value="gemini">Gemini</option>
 					<option value="pi">Pi</option>
 					<option value="antigravity">Antigravity</option>
+					<option value="kilo">Kilo</option>
 				</select>
 			</div>
 		</div>
