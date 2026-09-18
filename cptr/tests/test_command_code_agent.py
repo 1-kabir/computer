@@ -73,7 +73,7 @@ def test_tool_update_from_running_event():
         "description": "Listing files",
         "input": {"command": "ls"},
     }
-    tool = _tool_update_from_event(event, "sess-1")
+    tool = _tool_update_from_event(event, "sess-1", {})
     assert tool is not None
     assert tool.status == "in_progress"
     assert tool.call_id == "call-1"
@@ -88,22 +88,28 @@ def test_tool_update_from_completed_event_has_output():
         "toolName": "read_file",
         "output": "file contents",
     }
-    tool = _tool_update_from_event(event, None)
+    tool = _tool_update_from_event(event, None, {})
     assert tool is not None
     assert tool.status == "completed"
     assert tool.output == "file contents"
 
 
-def test_tool_update_without_call_id_falls_back():
+def test_tool_update_without_call_id_falls_back_with_counter():
     event = {"type": "tool_running", "toolName": "write_file"}
-    tool = _tool_update_from_event(event, "sess-9")
+    counter: dict[str, int] = {}
+    tool = _tool_update_from_event(event, "sess-9", counter)
     assert tool is not None
-    assert tool.call_id == "sess-9:write_file"
+    assert tool.call_id == "sess-9:write_file:0"
+    # A second id-less call to the same tool gets a distinct id instead of
+    # collapsing into the same UI item.
+    tool2 = _tool_update_from_event(dict(event), "sess-9", counter)
+    assert tool2 is not None
+    assert tool2.call_id == "sess-9:write_file:1"
 
 
 def test_tool_update_ignores_non_tool_events():
-    assert _tool_update_from_event({"type": "text_delta", "delta": "hi"}, None) is None
-    assert _tool_update_from_event({"type": "unknown_future_event"}, None) is None
+    assert _tool_update_from_event({"type": "text_delta", "delta": "hi"}, None, {}) is None
+    assert _tool_update_from_event({"type": "unknown_future_event"}, None, {}) is None
 
 
 def test_stream_frame_shapes_round_trip():
@@ -134,6 +140,47 @@ def test_stream_frame_shapes_round_trip():
     result = json.loads(result_line)
     assert result["type"] == "result" and result["subtype"] == "success"
     assert result["sessionId"] and result["finalText"] == "mango"
+
+
+def test_terminate_proc_escalates_to_kill_and_reaps():
+    """Subprocess-hygiene regression: a child ignoring SIGTERM is SIGKILLed
+    and reaped, not left running."""
+    import asyncio
+
+    from cptr.utils.agents.command_code import _terminate_proc
+
+    async def _run():
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            "-c",
+            "trap '' TERM; sleep 30",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        assert proc.returncode is None
+        await _terminate_proc(proc)
+        return proc.returncode
+
+    returncode = asyncio.run(_run())
+    assert returncode is not None and returncode != 0
+
+
+def test_terminate_proc_is_noop_on_exited_process():
+    import asyncio
+
+    from cptr.utils.agents.command_code import _terminate_proc
+
+    async def _run():
+        proc = await asyncio.create_subprocess_exec(
+            "true",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        await _terminate_proc(proc)
+        return proc.returncode
+
+    assert asyncio.run(_run()) == 0
 
 
 def test_dispatch_includes_command_code():

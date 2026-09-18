@@ -7,10 +7,12 @@ import base64
 import json
 import os
 import re
+import secrets
 import socket
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -26,9 +28,19 @@ from cptr.utils.agents.events import (
 from cptr.utils.agents.prompts import turn_prompt_text
 from cptr.utils.identity import env_for, preexec_for
 
-
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _OPENCODE_ACTIVITY = object()
+_OPENCODE_STREAM_FAILED = object()
+
+
+def _auth_username(profile: dict[str, Any]) -> str:
+    """Basic-auth username for an OpenCode-family server.
+
+    Kilo's server defaults KILO_SERVER_USERNAME to "kilo" (an explicit
+    kilocode_change from upstream), so authenticating as "opencode" always
+    401s against a Kilo server.
+    """
+    return "kilo" if str(profile.get("agent") or "") == "kilo" else "opencode"
 
 
 def _config_env(profile: dict[str, Any], env: dict[str, str]) -> dict[str, str]:
@@ -72,9 +84,15 @@ def opencode_server_url_candidates(server_url: str) -> list[str]:
 async def _server_url_from_stdout(proc: asyncio.subprocess.Process, port: int) -> str:
     assert proc.stdout is not None
     fallback = f"http://127.0.0.1:{port}"
-    deadline = asyncio.get_running_loop().time() + 5
+    # Cold starts of the Node-based CLI can stall stdout for several seconds
+    # (first-run model fetches, GC). Keep reading until the deadline instead
+    # of letting one slow line fail the turn.
+    deadline = asyncio.get_running_loop().time() + 15
     while asyncio.get_running_loop().time() < deadline:
-        line = await asyncio.wait_for(proc.stdout.readline(), timeout=1)
+        try:
+            line = await asyncio.wait_for(proc.stdout.readline(), timeout=1)
+        except asyncio.TimeoutError:
+            continue
         if not line:
             break
         match = re.search(r"(https?://[^\s]+)", line.decode(errors="replace"))
@@ -83,11 +101,37 @@ async def _server_url_from_stdout(proc: asyncio.subprocess.Process, port: int) -
     return fallback
 
 
+async def _wait_until_listening(server_url: str, headers: dict[str, str]) -> None:
+    """Poll until the spawned server accepts TCP connections.
+
+    Without this, the fallback URL is returned before the server is listening
+    and the first real request fails with ConnectError. Any HTTP response
+    (even 401/404) proves the socket is live.
+    """
+    deadline = asyncio.get_running_loop().time() + 10
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(2, connect=1)) as client:
+                await client.get(server_url, headers=headers)
+                return
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            await asyncio.sleep(0.3)
+        except httpx.HTTPStatusError:
+            return
+
+
 @asynccontextmanager
 async def _opencode_server(profile: dict[str, Any], workspace: str, identity=None):
+    """Yield (server_url, spawn_password, stderr_tail).
+
+    spawn_password is None when using an admin-provided external server_url;
+    for a spawned server it is a fresh per-spawn credential so the server is
+    never unsecured (loopback is shared between local users). stderr_tail is
+    a live list of the server's last stderr lines for error reporting.
+    """
     server_url = str(profile.get("server_url") or "").strip()
     if server_url:
-        yield server_url, None
+        yield server_url, None, []
         return
 
     env = (
@@ -96,7 +140,13 @@ async def _opencode_server(profile: dict[str, Any], workspace: str, identity=Non
         else os.environ.copy()
     )
     if profile.get("home"):
-        env["HOME"] = os.path.expanduser(str(profile["home"]))
+        env["HOME"] = _expand_home(str(profile["home"]), identity)
+    # Secure the spawned server with a fresh credential. Setting these env
+    # vars also overrides anything inherited from the server process, which
+    # would otherwise make the spawned server REQUIRE auth we never send.
+    spawn_password = secrets.token_urlsafe(24)
+    env["OPENCODE_SERVER_PASSWORD"] = spawn_password
+    env["KILO_SERVER_PASSWORD"] = spawn_password
     port = _free_port()
     proc = await asyncio.create_subprocess_exec(
         str(profile["command"]),
@@ -109,9 +159,13 @@ async def _opencode_server(profile: dict[str, Any], workspace: str, identity=Non
         env=_config_env(profile, env),
         preexec_fn=preexec_for(identity) if identity and identity.is_pam else None,
     )
-    stderr_task = asyncio.create_task(_drain_stderr(proc))
+    stderr_tail: list[str] = []
+    stderr_task = asyncio.create_task(_drain_stderr(proc, stderr_tail))
     try:
-        yield await _server_url_from_stdout(proc, port), proc
+        url = await _server_url_from_stdout(proc, port)
+        headers = _headers(profile, spawn_password)
+        await _wait_until_listening(url, headers)
+        yield url, spawn_password, stderr_tail
     finally:
         stderr_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -125,21 +179,44 @@ async def _opencode_server(profile: dict[str, Any], workspace: str, identity=Non
                 await proc.wait()
 
 
-async def _drain_stderr(proc: asyncio.subprocess.Process) -> None:
+async def _drain_stderr(proc: asyncio.subprocess.Process, tail: list[str]) -> None:
     assert proc.stderr is not None
     while True:
         try:
-            if not await proc.stderr.readline():
-                break
+            line = await proc.stderr.readline()
         except ValueError:
+            # Line exceeded the stream buffer limit; skip it but keep draining
+            # so the child's stderr pipe never fills and blocks the server.
             continue
+        if not line:
+            break
+        text = line.decode(errors="replace").strip()
+        if text:
+            tail.append(text[:2000])
+            del tail[:-20]
 
 
-def _headers(profile: dict[str, Any]) -> dict[str, str]:
-    password = str(profile.get("server_password") or "").strip()
+def _expand_home(home: str, identity=None) -> str:
+    """Resolve a profile home path against the execution identity.
+
+    os.path.expanduser always uses the server process's HOME, so a '~'-based
+    profile home would silently point a PAM-dropped-privilege agent at the
+    server user's home (and its credentials).
+    """
+    from pathlib import Path
+
+    if identity is not None and identity.is_pam:
+        from cptr.utils.identity import expand_user_path
+
+        return str(expand_user_path(home, identity))
+    return str(Path(os.path.expanduser(home)))
+
+
+def _headers(profile: dict[str, Any], spawn_password: str | None = None) -> dict[str, str]:
+    password = spawn_password or str(profile.get("server_password") or "").strip()
     if not password:
         return {}
-    token = base64.b64encode(f"opencode:{password}".encode()).decode()
+    token = base64.b64encode(f"{_auth_username(profile)}:{password}".encode()).decode()
     return {"Authorization": f"Basic {token}"}
 
 
@@ -351,9 +428,15 @@ async def run_opencode_agent(
     identity=None,
 ) -> AsyncIterator[AgentEvent]:
     del chat_params
+    stderr_tail: list[str] = []
     try:
-        async with _opencode_server(profile, workspace, identity) as (server_url, _proc):
-            headers = _headers(profile)
+        async with _opencode_server(profile, workspace, identity) as (
+            server_url,
+            spawn_password,
+            server_stderr_tail,
+        ):
+            stderr_tail = server_stderr_tail
+            headers = _headers(profile, spawn_password)
             urls = opencode_server_url_candidates(server_url)
             last_connect_error: Exception | None = None
             for index, candidate_url in enumerate(urls):
@@ -395,6 +478,7 @@ async def run_opencode_agent(
                                     continue
 
                                 last_activity = asyncio.get_running_loop().time()
+                                saw_activity = False
                                 while True:
                                     try:
                                         item = await asyncio.wait_for(event_queue.get(), timeout=1)
@@ -411,9 +495,17 @@ async def run_opencode_agent(
                                             )
                                             status = _session_data(payload).get(session_id)
                                             if (
-                                                not isinstance(status, dict)
-                                                or status.get("type") == "idle"
+                                                isinstance(status, dict)
+                                                and status.get("type") == "idle"
+                                                and saw_activity
                                             ):
+                                                # Only trust idle once the turn has
+                                                # shown activity: right after
+                                                # prompt_async the session may not
+                                                # be marked busy yet, and a
+                                                # missing/empty status map must not
+                                                # end the turn as a successful
+                                                # empty run.
                                                 break
                                         if asyncio.get_running_loop().time() - last_activity >= 600:
                                             raise RuntimeError(
@@ -422,10 +514,36 @@ async def run_opencode_agent(
                                         continue
                                     if item is _OPENCODE_ACTIVITY:
                                         last_activity = asyncio.get_running_loop().time()
+                                        saw_activity = True
                                         continue
+                                    if item is _OPENCODE_STREAM_FAILED:
+                                        # SSE stream died without a completion signal:
+                                        # distinguish "turn finished while we were not
+                                        # looking" from a mid-turn server death.
+                                        with suppress(Exception):
+                                            payload = await asyncio.wait_for(
+                                                _request(
+                                                    client,
+                                                    "GET",
+                                                    ["session/status", "session.status"],
+                                                    headers=headers,
+                                                ),
+                                                timeout=5,
+                                            )
+                                            status = _session_data(payload).get(session_id)
+                                            if (
+                                                isinstance(status, dict)
+                                                and status.get("type") == "idle"
+                                            ):
+                                                break
+                                        raise RuntimeError(
+                                            "OpenCode event stream disconnected before the "
+                                            "turn completed."
+                                        )
                                     if item is None:
                                         break
                                     last_activity = asyncio.get_running_loop().time()
+                                    saw_activity = True
                                     yield item
                             except asyncio.CancelledError:
                                 with suppress(Exception):
@@ -477,7 +595,10 @@ async def run_opencode_agent(
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - surfaced in chat.
-        yield AgentError(str(exc))
+        message = str(exc)
+        if stderr_tail:
+            message = f"{message} (server stderr: {' | '.join(stderr_tail[-3:])})"
+        yield AgentError(message)
 
 
 async def _collect_opencode_events(
@@ -488,6 +609,7 @@ async def _collect_opencode_events(
     queue: asyncio.Queue[AgentEvent | object | None],
 ) -> None:
     message_roles: dict[str, str] = {}
+    stream_failed = True
     try:
         for path in ("event.subscribe", "event/subscribe", "event"):
             try:
@@ -526,10 +648,16 @@ async def _collect_opencode_events(
                                 event.get("type") == "session.status"
                                 and status.get("type") == "idle"
                             ):
+                                stream_failed = False
                                 await queue.put(None)
                                 return
-            except Exception:
+            except Exception:  # noqa: BLE001, S112 - try alternate route names.
                 continue
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - collector task; failure is signaled via queue.
+        pass
+    # Stream ended without a completion signal: report failure distinctly so
+    # the consumer can check the session instead of assuming success.
+    if stream_failed:
+        await queue.put(_OPENCODE_STREAM_FAILED)
+    else:
         await queue.put(None)
-    await queue.put(None)

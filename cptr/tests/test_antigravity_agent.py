@@ -16,11 +16,11 @@ _LIVE_PREFIX = os.path.expanduser("~/.local/share/cptr")
 if os.path.abspath(os.environ.get("CPTR_DATA_DIR", _LIVE_PREFIX)) == _LIVE_PREFIX:
     pytest.exit("refusing: CPTR_DATA_DIR points at the live data dir", returncode=1)
 
-from cptr.utils.agents.antigravity import (  # noqa: E402
+from cptr.utils.agents.antigravity import (
     _tool_update_from_step,
     _usage_from,
 )
-from cptr.utils.agents.models import normalize_agent_profile  # noqa: E402
+from cptr.utils.agents.models import normalize_agent_profile
 
 
 def test_antigravity_profile_normalizes():
@@ -41,9 +41,7 @@ def test_usage_from_result_adds_total():
 
 
 def test_usage_from_result_keeps_provider_total():
-    usage = _usage_from(
-        {"usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 99}}
-    )
+    usage = _usage_from({"usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 99}})
     assert usage["total_tokens"] == 99
 
 
@@ -127,6 +125,37 @@ def test_stream_event_shapes_round_trip():
     for line in (init_line, delta_line, result_line):
         event = json.loads(line)
         assert event["event"] in {"init", "step_update", "result"}
+
+
+def test_stream_reader_handles_oversized_lines_without_valueerror():
+    """H1 regression helper: the chunked-read decoder must reassemble lines
+    larger than asyncio's 64KB readline limit."""
+    import codecs as _codecs
+
+    big_payload = "x" * 200_000
+    line = '{"event":"step_update","step_update":{"text_delta":"' + big_payload + '"}}\n'
+    decoder = _codecs.getincrementaldecoder("utf-8")(errors="replace")
+    buffer = ""
+    lines: list[str] = []
+    data = line.encode()
+    for i in range(0, len(data), 65536):
+        buffer += decoder.decode(data[i : i + 65536])
+        while True:
+            nl = buffer.find("\n")
+            if nl < 0:
+                break
+            lines.append(buffer[:nl])
+            buffer = buffer[nl + 1 :]
+    assert len(lines) == 1
+    parsed = json.loads(lines[0])
+    assert parsed["event"] == "step_update"
+    assert parsed["step_update"]["text_delta"] == big_payload
+
+
+def test_usage_from_result_with_none_values():
+    usage = _usage_from({"usage": {"input_tokens": None, "output_tokens": 5}})
+    assert usage["output_tokens"] == 5
+    assert usage["total_tokens"] == 5
 
 
 def test_dispatch_includes_antigravity():

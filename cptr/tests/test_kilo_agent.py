@@ -15,15 +15,33 @@ _LIVE_PREFIX = os.path.expanduser("~/.local/share/cptr")
 if os.path.abspath(os.environ.get("CPTR_DATA_DIR", _LIVE_PREFIX)) == _LIVE_PREFIX:
     pytest.exit("refusing: CPTR_DATA_DIR points at the live data dir", returncode=1)
 
-from cptr.utils.agents.detection import _opencode_config_env  # noqa: E402
-from cptr.utils.agents.models import normalize_agent_profile  # noqa: E402
-from cptr.utils.agents.opencode import _config_env  # noqa: E402
+from cptr.utils.agents.detection import _opencode_auth_headers, _opencode_config_env
+from cptr.utils.agents.models import normalize_agent_profile
+from cptr.utils.agents.opencode import _auth_username, _config_env, _headers
 
 
 def test_kilo_profile_normalizes():
     profile = normalize_agent_profile({"id": "kilo", "agent": "kilo"})
     assert profile["command"] == "kilo"
     assert profile["name"] == "Kilo"
+
+
+def test_kilo_auth_username_is_kilo_not_opencode():
+    """H1 regression: Kilo's server defaults KILO_SERVER_USERNAME to 'kilo'
+    (explicit kilocode_change from upstream); authenticating as 'opencode'
+    always 401s."""
+    assert _auth_username({"agent": "kilo"}) == "kilo"
+    assert _auth_username({"agent": "opencode"}) == "opencode"
+
+
+def test_kilo_basic_auth_header_uses_spawn_password_over_profile_password():
+    """M1 regression: a spawned server must auth with the fresh per-spawn
+    credential, and the header must use the Kilo username."""
+    import base64
+
+    headers = _headers({"agent": "kilo", "server_password": "profile-pw"}, "spawn-pw")
+    decoded = base64.b64decode(headers["Authorization"].removeprefix("Basic ")).decode()
+    assert decoded == "kilo:spawn-pw"
 
 
 def test_kilo_profile_accepts_server_fields():
@@ -57,6 +75,15 @@ def test_detection_config_env_sets_kilo_variable_for_kilo_profiles():
     assert env["KILO_CONFIG_CONTENT"] == "{}"
     env_open = _opencode_config_env("opencode", {"agent": "opencode"}, {})
     assert "KILO_CONFIG_CONTENT" not in env_open
+
+
+def test_detection_auth_headers_use_kilo_username_for_kilo():
+    headers = _opencode_auth_headers({"agent": "kilo"}, "pw")
+    assert "Basic" in headers["Authorization"]
+    import base64
+
+    decoded = base64.b64decode(headers["Authorization"].removeprefix("Basic ")).decode()
+    assert decoded.startswith("kilo:")
 
 
 def test_dispatch_includes_kilo():
