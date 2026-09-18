@@ -1693,6 +1693,7 @@ async def run_chat_task(
         from cptr.utils.agents.opencode import run_opencode_agent
         from cptr.utils.agents.pi import run_pi_agent
         from cptr.utils.agents.antigravity import run_antigravity_agent
+        from cptr.utils.agents.command_code import run_command_code_agent
 
         chat_obj = await Chat.get_by_id(chat_id)
         identity = await identity_for_context({"request": request, "user_id": user_id})
@@ -1761,6 +1762,7 @@ async def run_chat_task(
             "pi": run_pi_agent,
             "antigravity": run_antigravity_agent,
             "kilo": run_opencode_agent,
+            "command_code": run_command_code_agent,
         }
         runner = runners.get(agent_target.agent)
         if runner is None:

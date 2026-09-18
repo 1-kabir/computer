@@ -303,6 +303,12 @@ async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
         # unknown ones), so no model probe here: binary presence is enough.
         return AgentDetection("ready", command, version, None, [])
 
+    if profile.get("agent") == "command_code":
+        # Command Code resolves models itself at run time; the CLI's own
+        # default model applies when none is configured. Binary presence is
+        # enough — auth problems surface at turn time with exit code 3.
+        return AgentDetection("ready", command, version, None, [])
+
     return AgentDetection("error", command, version, "Unknown agent")
 
 

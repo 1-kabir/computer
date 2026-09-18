@@ -52,7 +52,8 @@
 			gemini: 'gemini',
 			pi: 'pi',
 			antigravity: 'agy',
-			kilo: 'kilo'
+			kilo: 'kilo',
+			command_code: 'cmd'
 		}[agent];
 	}
 
@@ -67,7 +68,8 @@
 			gemini: 'Gemini',
 			pi: 'Pi',
 			antigravity: 'Antigravity',
-			kilo: 'Kilo'
+			kilo: 'Kilo',
+			command_code: 'Command Code'
 		}[agent];
 	}
 </script>
@@ -141,6 +143,7 @@
 					<option value="pi">Pi</option>
 					<option value="antigravity">Antigravity</option>
 					<option value="kilo">Kilo</option>
+					<option value="command_code">Command Code</option>
 				</select>
 			</div>
 		</div>

@@ -70,7 +70,8 @@ export type AgentType =
 	| 'gemini'
 	| 'pi'
 	| 'antigravity'
-	| 'kilo';
+	| 'kilo'
+	| 'command_code';
 export type AgentMode = 'auto' | 'enabled' | 'disabled';
 export type AgentStatus = 'ready' | 'not_found' | 'missing_dependency' | 'auth_unknown' | 'error';
 
