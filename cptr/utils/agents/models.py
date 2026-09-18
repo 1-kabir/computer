@@ -100,10 +100,30 @@ DEFAULT_AGENT_PROFILES: list[dict[str, Any]] = [
         "models": [],
         "default_model": "",
     },
+    {
+        "id": "antigravity",
+        "agent": "antigravity",
+        "name": "Antigravity",
+        "mode": "auto",
+        "command": "agy",
+        "home": None,
+        "models": [],
+        "default_model": "",
+    },
 ]
 
 _PROFILE_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-_VALID_AGENTS = {"codex", "claude_code", "cursor", "grok", "opencode", "cline", "gemini", "pi"}
+_VALID_AGENTS = {
+    "codex",
+    "claude_code",
+    "cursor",
+    "grok",
+    "opencode",
+    "cline",
+    "gemini",
+    "pi",
+    "antigravity",
+}
 _VALID_MODES = {"auto", "enabled", "disabled"}
 _VALID_CODEX_APPROVAL = {"ask", "auto", "full"}
 _VALID_CODEX_SANDBOX = {"read-only", "workspace-write", "danger-full-access"}
@@ -125,6 +145,7 @@ _AGENT_DEFAULTS: dict[str, dict[str, str]] = {
     "cline": {"name": "Cline", "command": "cline", "model": ""},
     "gemini": {"name": "Gemini", "command": "gemini", "model": ""},
     "pi": {"name": "Pi", "command": "pi", "model": ""},
+    "antigravity": {"name": "Antigravity", "command": "agy", "model": ""},
 }
 
 
@@ -141,7 +162,8 @@ def normalize_agent_profile(raw: dict[str, Any]) -> dict[str, Any]:
     agent = str(profile.get("agent") or "").strip()
     if agent not in _VALID_AGENTS:
         raise HTTPException(
-            400, "agent must be codex, claude_code, cursor, grok, opencode, cline, gemini, or pi"
+            400,
+            "agent must be codex, claude_code, cursor, grok, opencode, cline, gemini, pi, or antigravity",
         )
     defaults = _AGENT_DEFAULTS[agent]
 

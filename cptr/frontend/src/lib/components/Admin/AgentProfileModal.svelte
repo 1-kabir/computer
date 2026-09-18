@@ -50,7 +50,8 @@
 			opencode: 'opencode',
 			cline: 'cline',
 			gemini: 'gemini',
-			pi: 'pi'
+			pi: 'pi',
+			antigravity: 'agy'
 		}[agent];
 	}
 
@@ -63,7 +64,8 @@
 			opencode: 'OpenCode',
 			cline: 'Cline',
 			gemini: 'Gemini',
-			pi: 'Pi'
+			pi: 'Pi',
+			antigravity: 'Antigravity'
 		}[agent];
 	}
 </script>
@@ -135,6 +137,7 @@
 					<option value="cline">Cline</option>
 					<option value="gemini">Gemini</option>
 					<option value="pi">Pi</option>
+					<option value="antigravity">Antigravity</option>
 				</select>
 			</div>
 		</div>

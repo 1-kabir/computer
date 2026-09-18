@@ -68,7 +68,8 @@ export type AgentType =
 	| 'opencode'
 	| 'cline'
 	| 'gemini'
-	| 'pi';
+	| 'pi'
+	| 'antigravity';
 export type AgentMode = 'auto' | 'enabled' | 'disabled';
 export type AgentStatus = 'ready' | 'not_found' | 'missing_dependency' | 'auth_unknown' | 'error';
 
