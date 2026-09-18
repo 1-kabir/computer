@@ -1692,6 +1692,7 @@ async def run_chat_task(
         from cptr.utils.agents.grok import run_grok_agent
         from cptr.utils.agents.opencode import run_opencode_agent
         from cptr.utils.agents.pi import run_pi_agent
+        from cptr.utils.agents.antigravity import run_antigravity_agent
 
         chat_obj = await Chat.get_by_id(chat_id)
         identity = await identity_for_context({"request": request, "user_id": user_id})
@@ -1758,6 +1759,7 @@ async def run_chat_task(
             "cline": run_cline_agent,
             "gemini": run_gemini_agent,
             "pi": run_pi_agent,
+            "antigravity": run_antigravity_agent,
         }
         runner = runners.get(agent_target.agent)
         if runner is None:

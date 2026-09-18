@@ -10,9 +10,7 @@ from cptr.env import AGENT_SEED_TRANSCRIPT_MAX_CHARS
 def message_text(message: dict[str, Any]) -> str:
     content = message.get("content", "")
     if isinstance(content, list):
-        return "\n".join(
-            str(block.get("text", "")) for block in content if isinstance(block, dict)
-        )
+        return "\n".join(str(block.get("text", "")) for block in content if isinstance(block, dict))
     return str(content or "")
 
 
@@ -46,8 +44,7 @@ def session_turn_prompt_text(messages: list[dict[str, Any]], resumed: bool) -> s
     for part in reversed(parts):
         if len(part) > AGENT_SEED_TRANSCRIPT_MAX_CHARS:
             selected.append(
-                "[Earlier conversation truncated.]\n"
-                + part[-AGENT_SEED_TRANSCRIPT_MAX_CHARS:]
+                "[Earlier conversation truncated.]\n" + part[-AGENT_SEED_TRANSCRIPT_MAX_CHARS:]
             )
             truncated = True
             break

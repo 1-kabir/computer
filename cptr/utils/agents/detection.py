@@ -295,6 +295,11 @@ async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
             )
         return AgentDetection("ready", command, version, None, models)
 
+    if profile.get("agent") == "antigravity":
+        # Antigravity resolves models itself at run time (and fails loudly on
+        # unknown ones), so no model probe here: binary presence is enough.
+        return AgentDetection("ready", command, version, None, [])
+
     return AgentDetection("error", command, version, "Unknown agent")
 
 
