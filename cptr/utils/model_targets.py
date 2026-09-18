@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from fastapi import HTTPException
 
@@ -30,7 +30,7 @@ class AgentModelTarget:
     config: dict[str, Any]
 
 
-ModelTarget = Union[ApiModelTarget, AgentModelTarget]
+ModelTarget = ApiModelTarget | AgentModelTarget
 
 
 async def resolve_agent_model_target(model_id: str, app_state=None) -> AgentModelTarget:
@@ -51,6 +51,21 @@ async def resolve_agent_model_target(model_id: str, app_state=None) -> AgentMode
             400,
             f"agent profile {profile_id} is not available: "
             f"{detection.get('message') or detection.get('status')}",
+        )
+
+    # The model string is forwarded to agent CLIs as an argv element
+    # (e.g. `cmd --model <model>`), so a value beginning with "-" would be
+    # parsed as a flag — an option-injection vector (a model id like
+    # `agent:x/--yolo` could otherwise disable CLI permission gating).
+    if model.startswith("-"):
+        raise HTTPException(400, "agent model must not start with '-'")
+
+    # When the profile declares an allowlist, hold selections to it.
+    allowed = profile.get("models") or []
+    if allowed and model != "default" and model not in allowed:
+        raise HTTPException(
+            400,
+            f"model '{model}' is not configured for agent profile {profile_id}",
         )
 
     return AgentModelTarget(

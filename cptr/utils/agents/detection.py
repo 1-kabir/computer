@@ -10,7 +10,7 @@ import re
 import shutil
 import socket
 from contextlib import suppress
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import httpx
@@ -524,6 +524,20 @@ def _opencode_config_env(
     return env
 
 
+def _opencode_auth_headers(profile: dict[str, Any], password: str) -> dict[str, str]:
+    """Basic-auth headers for an OpenCode-family server.
+
+    Kilo's server defaults KILO_SERVER_USERNAME to "kilo" (an explicit
+    kilocode_change from upstream), so authenticating as "opencode" always
+    401s against a Kilo server.
+    """
+    import base64
+
+    username = "kilo" if str(profile.get("agent") or "") == "kilo" else "opencode"
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
 async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[str] | None:
     env = os.environ.copy()
     if profile.get("home"):
@@ -534,6 +548,14 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
     try:
         if not server_url:
             port = _free_port()
+            # Secure the probe server with a fresh credential and override any
+            # inherited KILO/OPENCODE_SERVER_PASSWORD (which would make the
+            # spawned server require auth the probe never sends).
+            import secrets as _secrets
+
+            password = _secrets.token_urlsafe(24)
+            env["OPENCODE_SERVER_PASSWORD"] = password
+            env["KILO_SERVER_PASSWORD"] = password
             proc = await asyncio.create_subprocess_exec(
                 command,
                 "serve",
@@ -544,12 +566,7 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
                 env=_opencode_config_env(command, profile, env),
             )
             server_url = await _read_opencode_server_url(proc, port)
-        headers = {}
-        if password:
-            import base64
-
-            token = base64.b64encode(f"opencode:{password}".encode()).decode()
-            headers["Authorization"] = f"Basic {token}"
+        headers = _opencode_auth_headers(profile, password)
         for candidate_url in opencode_server_url_candidates(server_url):
             try:
                 async with httpx.AsyncClient(base_url=candidate_url, timeout=5) as client:
@@ -627,9 +644,12 @@ def _free_port() -> int:
 async def _read_opencode_server_url(proc: asyncio.subprocess.Process, port: int) -> str:
     assert proc.stdout is not None
     fallback = f"http://127.0.0.1:{port}"
-    deadline = asyncio.get_running_loop().time() + 5
+    deadline = asyncio.get_running_loop().time() + 15
     while asyncio.get_running_loop().time() < deadline:
-        line = await asyncio.wait_for(proc.stdout.readline(), timeout=1)
+        try:
+            line = await asyncio.wait_for(proc.stdout.readline(), timeout=1)
+        except asyncio.TimeoutError:
+            continue
         if not line:
             break
         text = line.decode(errors="replace").strip()
