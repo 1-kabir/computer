@@ -69,7 +69,8 @@ export type AgentType =
 	| 'cline'
 	| 'gemini'
 	| 'pi'
-	| 'antigravity';
+	| 'antigravity'
+	| 'kilo';
 export type AgentMode = 'auto' | 'enabled' | 'disabled';
 export type AgentStatus = 'ready' | 'not_found' | 'missing_dependency' | 'auth_unknown' | 'error';
 

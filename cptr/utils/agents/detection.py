@@ -142,7 +142,10 @@ async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
     raw_command = str(profile.get("command") or "").strip()
     command = _resolve_command(raw_command)
     default_claude_command = profile.get("agent") == "claude_code" and raw_command == "claude"
-    if profile.get("agent") == "opencode" and str(profile.get("server_url") or "").strip():
+    if (
+        profile.get("agent") in ("opencode", "kilo")
+        and str(profile.get("server_url") or "").strip()
+    ):
         version = None
         if command is not None:
             code, version_text = await _run_probe([command, "--version"])
@@ -239,7 +242,7 @@ async def detect_profile(profile: dict[str, Any]) -> AgentDetection:
             )
         return AgentDetection("ready", command, version, None, models)
 
-    if profile.get("agent") == "opencode":
+    if profile.get("agent") in ("opencode", "kilo"):
         models = await _probe_opencode_models(command, profile)
         if not models:
             return AgentDetection(
@@ -500,6 +503,21 @@ async def _probe_grok_models(command: str, profile: dict[str, Any]) -> list[str]
         await client.close()
 
 
+def _opencode_config_env(
+    command: str, profile: dict[str, Any], env: dict[str, str]
+) -> dict[str, str]:
+    """Isolation config env for an OpenCode-family `serve` spawn.
+
+    Kilo (an OpenCode fork) reads KILO_CONFIG_CONTENT and no longer falls
+    back to OpenCode config locations; setting both variables is harmless
+    for real OpenCode and required for Kilo.
+    """
+    env = {**env, "OPENCODE_CONFIG_CONTENT": "{}"}
+    if str(profile.get("agent") or "") == "kilo":
+        env["KILO_CONFIG_CONTENT"] = "{}"
+    return env
+
+
 async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[str] | None:
     env = os.environ.copy()
     if profile.get("home"):
@@ -517,7 +535,7 @@ async def _probe_opencode_models(command: str, profile: dict[str, Any]) -> list[
                 f"--port={port}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**env, "OPENCODE_CONFIG_CONTENT": "{}"},
+                env=_opencode_config_env(command, profile, env),
             )
             server_url = await _read_opencode_server_url(proc, port)
         headers = {}
