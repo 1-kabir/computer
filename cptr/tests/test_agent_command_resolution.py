@@ -5,6 +5,7 @@ per-user install locations (~/.local/bin, nvm/fnm global bins). Bare
 command names for CLIs installed there must still resolve.
 """
 
+import asyncio
 import stat
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from cptr.utils.agents.detection import (
     _npm_global_bin_dirs,
     _resolve_command,
+    get_available_agent_model_entries,
 )
 
 
@@ -112,3 +114,100 @@ class TestNpmGlobalBinDirs:
         monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
         (tmp_path / "empty-home").mkdir()
         assert _npm_global_bin_dirs() == []
+
+
+class TestAvailableAgentModelEntries:
+    """Ready profiles must always be selectable in the model picker.
+
+    Adapters that resolve models at run time (antigravity, command_code)
+    probe none during detection; without a fallback entry their profiles
+    were ready in admin yet absent from the picker.
+    """
+
+    @staticmethod
+    def _patch_status(monkeypatch, profiles):
+        async def fake_status(app_state=None, refresh=False):
+            return {"profiles": profiles}
+
+        monkeypatch.setattr("cptr.utils.agents.detection.get_agent_status", fake_status)
+
+    def test_modelless_ready_profile_gets_default_entry(self, monkeypatch):
+        self._patch_status(
+            monkeypatch,
+            [
+                {
+                    "id": "antigravity",
+                    "agent": "antigravity",
+                    "name": "Antigravity",
+                    "available": True,
+                    "config": {
+                        "id": "antigravity",
+                        "agent": "antigravity",
+                        "models": [],
+                    },
+                }
+            ],
+        )
+        entries = asyncio.run(get_available_agent_model_entries())
+        assert len(entries) == 1
+        assert entries[0]["id"] == "agent:antigravity/default"
+
+    def test_configured_models_listed_without_default(self, monkeypatch):
+        self._patch_status(
+            monkeypatch,
+            [
+                {
+                    "id": "cmd",
+                    "agent": "command_code",
+                    "name": "Command Code",
+                    "available": True,
+                    "config": {
+                        "id": "cmd",
+                        "agent": "command_code",
+                        "models": ["model-x", "model-y"],
+                    },
+                }
+            ],
+        )
+        entries = asyncio.run(get_available_agent_model_entries())
+        assert [e["id"] for e in entries] == [
+            "agent:cmd/model-x",
+            "agent:cmd/model-y",
+        ]
+
+    def test_unavailable_profile_skipped(self, monkeypatch):
+        self._patch_status(
+            monkeypatch,
+            [
+                {
+                    "id": "broken",
+                    "agent": "antigravity",
+                    "name": "Broken",
+                    "available": False,
+                    "config": {"id": "broken", "agent": "antigravity", "models": []},
+                }
+            ],
+        )
+        assert asyncio.run(get_available_agent_model_entries()) == []
+
+    def test_probed_models_precede_fallback(self, monkeypatch):
+        """Effective profile already merges probed + configured models; the
+        fallback only fires when that merged list is genuinely empty."""
+        self._patch_status(
+            monkeypatch,
+            [
+                {
+                    "id": "kilo",
+                    "agent": "kilo",
+                    "name": "Kilo",
+                    "available": True,
+                    "config": {
+                        "id": "kilo",
+                        "agent": "kilo",
+                        "models": ["probed-model"],
+                    },
+                }
+            ],
+        )
+        entries = asyncio.run(get_available_agent_model_entries())
+        assert [e["id"] for e in entries] == ["agent:kilo/probed-model"]
