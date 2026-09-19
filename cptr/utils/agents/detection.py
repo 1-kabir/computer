@@ -50,6 +50,48 @@ class AgentDetection:
         return asdict(self)
 
 
+# Fallback search dirs for CLI agents installed outside the service PATH.
+# Node version managers (nvm/fnm/volta) install global npm bins under a
+# version-pinned directory, and user-local installs land in ~/.local/bin —
+# neither is guaranteed to be on the (fixed) systemd service PATH, so bare
+# command names like "cmd" or "agy" fail to resolve even when installed.
+_EXTRA_BIN_DIRS = (
+    os.path.expanduser("~/.local/bin"),
+    os.path.join(os.path.expanduser("~"), ".cargo", "bin"),
+    os.path.join(os.path.expanduser("~"), "bin"),
+)
+
+
+def _npm_global_bin_dirs() -> list[str]:
+    """Best-effort list of version-manager global bin dirs, newest first."""
+    home = os.path.expanduser("~")
+    candidates: list[str] = []
+    # nvm: scan ~/.nvm/versions/node/*/<...>/bin, newest version last -> reversed
+    nvm_root = os.path.join(home, ".nvm", "versions", "node")
+    try:
+        entries = os.listdir(nvm_root)
+    except OSError:
+        entries = []
+    for version in sorted(entries, reverse=True):
+        candidates.append(os.path.join(nvm_root, version, "bin"))
+    # fnm: ~/.fnm/node-versions/<ver>/installation/bin, plus default alias
+    fnm_versions = os.path.join(home, ".fnm", "node-versions")
+    try:
+        entries = os.listdir(fnm_versions)
+    except OSError:
+        entries = []
+    for version in sorted(entries, reverse=True):
+        candidates.append(os.path.join(fnm_versions, version, "installation", "bin"))
+    fnm_default = os.path.join(home, ".fnm", "aliases", "default", "bin")
+    if os.path.isdir(fnm_default):
+        candidates.append(fnm_default)
+    # volta keeps a stable shim dir
+    volta_bin = os.path.join(home, ".volta", "bin")
+    if os.path.isdir(volta_bin):
+        candidates.append(volta_bin)
+    return [d for d in candidates if os.path.isdir(d)]
+
+
 def _resolve_command(command: str) -> str | None:
     command = command.strip()
     if not command:
@@ -57,7 +99,16 @@ def _resolve_command(command: str) -> str | None:
     expanded = os.path.expanduser(command)
     if os.path.isabs(expanded):
         return expanded if os.access(expanded, os.X_OK) else None
-    return shutil.which(command)
+    found = shutil.which(command)
+    if found:
+        return found
+    # Bare names may live in dirs missing from the (fixed) service PATH:
+    # ~/.local/bin, npm/Node-version-manager global bins, etc.
+    for directory in (*_EXTRA_BIN_DIRS, *_npm_global_bin_dirs()):
+        candidate = os.path.join(directory, command)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def _find_claude_desktop_command() -> str | None:
@@ -702,12 +753,15 @@ async def get_agent_status(app_state=None, refresh: bool = False) -> dict[str, A
         available = mode != "disabled" and (mode != "auto" or detected.status == "ready")
         effective_profile = dict(profile)
         resolved_profile_command = _resolve_command(str(profile.get("command") or ""))
-        if (
-            detected.command
-            and profile.get("agent") == "claude_code"
-            and detected.command != resolved_profile_command
-        ):
+        if detected.command and detected.command != resolved_profile_command:
+            # Persist the resolved absolute command so every adapter spawns the
+            # binary that detection found, even when it lives outside the
+            # (fixed) service PATH — e.g. nvm-managed CLIs or ~/.local/bin.
             effective_profile["command"] = detected.command
+        elif detected.command is None and profile.get("agent") == "claude_code":
+            desktop_command = _find_claude_desktop_command()
+            if desktop_command:
+                effective_profile["command"] = desktop_command
         effective_profile["models"] = models
         if models and effective_profile.get("default_model") not in models:
             effective_profile["default_model"] = models[0]
