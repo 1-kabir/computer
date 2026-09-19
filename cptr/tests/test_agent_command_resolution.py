@@ -6,13 +6,17 @@ command names for CLIs installed there must still resolve.
 """
 
 import asyncio
+import os
 import stat
 
 import pytest
 
 from cptr.utils.agents.detection import (
+    AgentDetection,
+    _effective_spawn_command,
     _npm_global_bin_dirs,
     _resolve_command,
+    get_agent_status,
     get_available_agent_model_entries,
 )
 
@@ -211,3 +215,87 @@ class TestAvailableAgentModelEntries:
         )
         entries = asyncio.run(get_available_agent_model_entries())
         assert [e["id"] for e in entries] == ["agent:kilo/probed-model"]
+
+
+class TestEffectiveSpawnCommand:
+    """Regression: the resolved absolute command must be persisted into the
+    effective profile. Adapters spawn profile["command"] verbatim against
+    the fixed service PATH; if only detection resolves it, spawn fails with
+    FileNotFoundError ([Errno 2]) while admin shows the profile as ready."""
+
+    def test_resolved_path_persisted_when_it_differs_from_raw(self):
+        detected = AgentDetection("ready", "/home/u/.nvm/versions/node/v9/bin/cmd")
+        assert (
+            _effective_spawn_command({"command": "cmd", "agent": "command_code"}, detected)
+            == "/home/u/.nvm/versions/node/v9/bin/cmd"
+        )
+
+    def test_raw_command_kept_when_detection_found_nothing_new(self):
+        # Absolute-path profiles resolve to themselves: keep as-is.
+        detected = AgentDetection("ready", "/opt/bin/agy")
+        assert (
+            _effective_spawn_command({"command": "/opt/bin/agy", "agent": "antigravity"}, detected)
+            == "/opt/bin/agy"
+        )
+
+    def test_raw_command_kept_when_detection_failed(self):
+        detected = AgentDetection("not_found", None, None, "Command not found")
+        assert (
+            _effective_spawn_command({"command": "missing-cli", "agent": "grok"}, detected)
+            == "missing-cli"
+        )
+
+    def test_claude_desktop_fallback_applied_when_detection_is_none(self, monkeypatch, tmp_path):
+        desktop = tmp_path / "claude"
+        desktop.write_text("#!/bin/sh\n")
+        desktop.chmod(0o755)
+        monkeypatch.setattr(
+            "cptr.utils.agents.detection._find_claude_desktop_command",
+            lambda: str(desktop),
+        )
+        detected = AgentDetection("not_found", None, None, "Command not found")
+        assert _effective_spawn_command(
+            {"command": "claude", "agent": "claude_code"}, detected
+        ) == str(desktop)
+
+
+class TestGetAgentStatusPersistsResolvedCommand:
+    """End-to-end through get_agent_status: the effective profile handed to
+    adapters must carry the resolved absolute path."""
+
+    def _patch_profiles(self, monkeypatch, profiles):
+        async def fake_raw_profiles():
+            return profiles
+
+        monkeypatch.setattr("cptr.utils.agents.detection.get_raw_agent_profiles", fake_raw_profiles)
+
+    def test_effective_profile_command_is_absolute(self, monkeypatch, tmp_path):
+        nvm_bin = tmp_path / "nvm" / "v9" / "bin"
+        nvm_bin.mkdir(parents=True)
+        exe = nvm_bin / "fakecli"
+        exe.write_text("#!/bin/sh\necho fakecli version 1.0\n")
+        exe.chmod(0o755)
+        self._patch_profiles(
+            monkeypatch,
+            [
+                {
+                    "id": "fakecli",
+                    "agent": "antigravity",
+                    "name": "FakeCLI",
+                    "mode": "auto",
+                    "command": "fakecli",
+                    "home": None,
+                    "models": [],
+                    "default_model": "",
+                }
+            ],
+        )
+        monkeypatch.setattr("cptr.utils.agents.detection._EXTRA_BIN_DIRS", (str(nvm_bin),))
+        monkeypatch.setattr("cptr.utils.agents.detection._npm_global_bin_dirs", list)
+        status = asyncio.run(get_agent_status(refresh=True))
+        entry = next(p for p in status["profiles"] if p["id"] == "fakecli")
+        assert entry["available"] is True
+        # This is the assertion that failed in production: the effective
+        # profile must NOT carry the bare name that spawn cannot resolve.
+        assert entry["config"]["command"] == str(exe)
+        assert os.path.isabs(entry["config"]["command"])
