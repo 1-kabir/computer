@@ -731,6 +731,26 @@ async def _opencode_json(
     return {}
 
 
+def _effective_spawn_command(profile: dict[str, Any], detected: AgentDetection) -> str:
+    """The command string adapters should actually spawn.
+
+    Detection resolves the profile's command to an absolute path (possibly
+    via the PATH-fallback scan). If that differs from the raw configured
+    name — e.g. "cmd" resolved to an nvm bin path — the resolved path must
+    be persisted into the effective profile, because adapters spawn
+    profile["command"] verbatim against the (fixed) service PATH, where the
+    bare name may not exist.
+    """
+    raw_command = str(profile.get("command") or "").strip()
+    if detected.command and detected.command != raw_command:
+        return detected.command
+    if detected.command is None and profile.get("agent") == "claude_code":
+        desktop_command = _find_claude_desktop_command()
+        if desktop_command:
+            return desktop_command
+    return raw_command
+
+
 async def get_agent_status(app_state=None, refresh: bool = False) -> dict[str, Any]:
     now = asyncio.get_running_loop().time()
     cache = getattr(app_state, "AGENTS", None) if app_state is not None else None
@@ -752,16 +772,10 @@ async def get_agent_status(app_state=None, refresh: bool = False) -> dict[str, A
         models = list(dict.fromkeys([*(detected.models or []), *(profile.get("models") or [])]))
         available = mode != "disabled" and (mode != "auto" or detected.status == "ready")
         effective_profile = dict(profile)
-        resolved_profile_command = _resolve_command(str(profile.get("command") or ""))
-        if detected.command and detected.command != resolved_profile_command:
-            # Persist the resolved absolute command so every adapter spawns the
-            # binary that detection found, even when it lives outside the
-            # (fixed) service PATH — e.g. nvm-managed CLIs or ~/.local/bin.
-            effective_profile["command"] = detected.command
-        elif detected.command is None and profile.get("agent") == "claude_code":
-            desktop_command = _find_claude_desktop_command()
-            if desktop_command:
-                effective_profile["command"] = desktop_command
+        # Persist the resolved absolute command so every adapter spawns the
+        # binary that detection found, even when it lives outside the
+        # (fixed) service PATH — e.g. nvm-managed CLIs or ~/.local/bin.
+        effective_profile["command"] = _effective_spawn_command(profile, detected)
         effective_profile["models"] = models
         if models and effective_profile.get("default_model") not in models:
             effective_profile["default_model"] = models[0]
