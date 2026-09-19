@@ -796,7 +796,15 @@ async def get_available_agent_model_entries(app_state=None) -> list[dict[str, st
         if not profile["available"]:
             continue
         config = profile["config"]
-        for model in config.get("models") or []:
+        models = list(config.get("models") or [])
+        if not models:
+            # Some adapters (antigravity, command_code) resolve models at run
+            # time and probe none here. A ready profile must still be
+            # selectable: emit one "default" entry that the adapters map to
+            # the CLI's own default model. Without this, the profile is
+            # ready in admin yet invisible in the model picker.
+            models = ["default"]
+        for model in models:
             model_id = model_id_for_profile(config, model)
             entries.append(
                 {
