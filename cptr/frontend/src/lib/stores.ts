@@ -26,6 +26,7 @@ import {
 	saveWorkspaceState
 } from '$lib/apis/state';
 import { listSessions, createSession, deleteSession } from '$lib/apis/terminal';
+import { disposeTerminalSession } from '$lib/terminals';
 import { createBrowserSession, deleteBrowserSession, listBrowserSessions } from '$lib/apis/browser';
 import { changeLocale, i18next } from '$lib/i18n';
 import { requestConfirm } from '$lib/stores/confirm';
@@ -1620,6 +1621,7 @@ export async function closeTab(
 
 	if (tab.type === 'terminal' && tab.sessionId) {
 		deleteSession(tab.sessionId);
+		disposeTerminalSession(tab.sessionId);
 	}
 	if (tab.type === 'browser' && tab.browserSessionId) {
 		deleteBrowserSession(tab.browserSessionId);

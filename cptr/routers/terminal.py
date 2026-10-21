@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import List, Optional
 
@@ -236,11 +237,29 @@ async def terminal_ws(websocket: WebSocket, session_id: str):
         f"WebSocket connected for session {session_id}, fd={session._fd}, alive={session.is_alive()}"
     )
 
-    # Replay scrollback buffer so reconnecting clients see history
-    scrollback = session.get_scrollback()
-    if scrollback:
-        logger.info(f"Replaying {len(scrollback)} bytes of scrollback")
-        await websocket.send_bytes(scrollback)
+    # Resume protocol: the client reports how many raw output bytes it has
+    # already consumed via ?offset=N. A fresh client (offset=0) receives the
+    # full retained buffer (~1 MB) so history survives page reloads;
+    # reconnecting clients resume exactly where they left off, with no
+    # duplicated or skipped bytes. The snapshot + resume offset are computed
+    # atomically in replay(), closing the old race between the scrollback
+    # read and the stream-task offset. A JSON control frame announces the
+    # absolute offset of the bytes that follow so the client can keep its
+    # counter exact even when the retained window has been trimmed.
+    try:
+        requested_offset = max(0, int(websocket.query_params.get("offset", "0")))
+    except ValueError:
+        requested_offset = 0
+    replay_bytes, resume_offset = session.replay(requested_offset)
+    await websocket.send_text(
+        json.dumps({"type": "sync", "offset": resume_offset - len(replay_bytes)})
+    )
+    if replay_bytes:
+        logger.info(
+            f"Replaying {len(replay_bytes)} bytes for session {session_id} "
+            f"(client at {requested_offset}, resuming at {resume_offset})"
+        )
+        await websocket.send_bytes(replay_bytes)
 
     # Message type constants (must match frontend)
     MSG_INPUT = 0
@@ -253,11 +272,10 @@ async def terminal_ws(websocket: WebSocket, session_id: str):
         SessionManager.create), so this task only forwards buffered output.
         A client that disconnects never interrupts the child process: on
         reconnect the client resumes from its byte offset in the buffer.
+        Resumes from the offset computed by replay() above, so bytes sent
+        in the initial replay are never sent twice.
         """
-        offset = session._total_bytes - len(session._output)
-        if scrollback:
-            # Skip what was already sent in the scrollback replay above.
-            offset = session._total_bytes
+        offset = resume_offset
         try:
             while True:
                 data, offset = session.bytes_since(offset)

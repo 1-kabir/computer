@@ -39,6 +39,7 @@
 	import { toast } from 'svelte-sonner';
 	import { getWelcome, getWorkspaceState } from '$lib/apis/state';
 	import { createSession, deleteSession } from '$lib/apis/terminal';
+	import { disposeTerminalSession } from '$lib/terminals';
 	import { createBrowserSession, deleteBrowserSession } from '$lib/apis/browser';
 	import { createEntry, writeFile, uploadFiles as uploadFilesApi } from '$lib/apis/files';
 	import { getChat, getChats, updateChatTitle, type ChatInfo } from '$lib/apis/chat';
@@ -180,7 +181,10 @@
 		const index = group.tabs.findIndex((tab) => tab.id === tabId);
 		const tab = group.tabs[index];
 		if (!tab || tab.permanent) return;
-		if (tab.type === 'terminal' && tab.sessionId) deleteSession(tab.sessionId);
+		if (tab.type === 'terminal' && tab.sessionId) {
+			deleteSession(tab.sessionId);
+			disposeTerminalSession(tab.sessionId);
+		}
 		if (tab.type === 'browser' && tab.browserSessionId) deleteBrowserSession(tab.browserSessionId);
 		const tabs = group.tabs.filter((item) => item.id !== tabId);
 		const activeTabId =

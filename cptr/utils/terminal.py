@@ -17,8 +17,7 @@ from typing import Dict, List, Optional
 
 from cptr.utils.identity import ExecutionIdentity, env_for, expand_user_path, preexec_for
 
-SCROLLBACK_SIZE = 64 * 1024  # 64 KB
-OUTPUT_CAP = 256 * 1024  # in-memory output buffer cap for reattach tailing
+OUTPUT_CAP = 1024 * 1024  # in-memory output buffer retained for replay + reattach tailing
 IS_WINDOWS = platform.system() == "Windows"
 
 
@@ -43,7 +42,6 @@ class TerminalSession:
     identity: ExecutionIdentity | None = field(default=None, repr=False)
     rows: int = 24
     cols: int = 80
-    _scrollback: bytearray = field(default_factory=bytearray, repr=False)
 
     # Persistent output buffer + byte counter for detached draining.
     _output: bytearray = field(default_factory=bytearray, repr=False)
@@ -74,16 +72,7 @@ class TerminalSession:
                 data = os.read(self._fd, size)
         except (BlockingIOError, OSError):
             return b""
-        if data:
-            self._scrollback.extend(data)
-            # Trim at 2x cap to amortize the cost. This halves the number of
-            # 64 KB memcpy operations during high-throughput output.
-            if len(self._scrollback) > SCROLLBACK_SIZE * 2:
-                self._scrollback = self._scrollback[-SCROLLBACK_SIZE:]
         return data
-
-    def get_scrollback(self) -> bytes:
-        return bytes(self._scrollback)
 
     # ── Detached output draining ─────────────────────────────
 
@@ -103,6 +92,21 @@ class TerminalSession:
         start_in_buf = total - len(self._output)
         start = max(0, offset - start_in_buf)
         return bytes(self._output[start:]), total
+
+    def replay(self, offset: int) -> tuple[bytes, int]:
+        """Atomically snapshot what a (re)connecting client should receive.
+
+        Returns (bytes to send, absolute offset the stream must resume from)
+        in a single synchronous step, so output produced while the replay is
+        in flight is never skipped or duplicated. ``offset`` is the absolute
+        byte offset the client already consumed; 0 (or an offset older than
+        the retained window) replays the full retained buffer.
+        """
+        total = self._total_bytes
+        if offset <= 0 or offset > total:
+            offset = total - len(self._output)
+        data, resume = self.bytes_since(offset)
+        return data, resume
 
     async def _notify_output(self) -> None:
         async with self._output_condition:
